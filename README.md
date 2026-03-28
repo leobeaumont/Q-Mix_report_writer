@@ -71,6 +71,21 @@ bash scripts/run_hle_gpt.sh
 | 6 | Beyond-AIME | `ByteDance-Seed/BeyondAIME` | test | 100 | Math | `run_test_beyond_aime.sh` |
 | 7 | HMMT Feb 2025 | `MathArena/hmmt_feb_2025` | train | 30 | Math | `run_test_hmmt2025.sh` |
 
+## Agent Baseline
+
+The `agent_baseline/` directory contains the framework comparison baselines used in our evaluation. It benchmarks four industry-standard multi-agent frameworks on the same tasks:
+
+| Framework | Pattern | Source |
+|---|---|---|
+| **AutoGen** | Multi-agent group chat (`RoundRobinGroupChat`) | [microsoft/autogen](https://github.com/microsoft/autogen) |
+| **LangGraph** | Multi-node graph workflow (`StateGraph`) | [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph) |
+| **Agent Framework** | Orchestrated agent pipeline | [microsoft/agent-framework](https://github.com/microsoft/agent-framework) |
+| **Lobster** | Single-agent baseline (direct API call) | — |
+
+We thank the developers of these open-source frameworks for making their tools publicly available.
+
+See [`agent_baseline/README.md`](agent_baseline/README.md) for setup and usage instructions.
+
 ## Project Structure
 
 ```
@@ -82,7 +97,8 @@ agent_q_mix/
 ├── prompt/                  # Domain-specific prompt sets
 ├── datasets/                # Benchmark dataset loaders
 ├── experiments/             # Training and evaluation scripts
-├── scripts/                 # Shell scripts (train + 10 test benchmarks)
+├── scripts/                 # Shell scripts for training + evaluation
 ├── checkpoints/             # Saved QMIX models
-└── result/                  # Evaluation results (JSON + JSONL)
+├── result*/                 # Evaluation results (JSON + JSONL)
+└── agent_baseline/          # Framework comparison baselines (AutoGen, LangGraph, etc.)
 ```

@@ -16,3 +16,12 @@ result_mercury/
 scripts/run_all_mercury.sh
 scripts/run_gpt_ablation.sh
 scripts/run_all_gemini_ablation.sh
+
+# Exclude agent_baseline secrets and mercury
+agent_baseline/.env
+agent_baseline/results_mercury/
+agent_baseline/script/run_all_mercury.sh
+agent_baseline/agent-framework/
+agent_baseline/autogen/
+agent_baseline/langgraph/
+agent_baseline/lobster/
