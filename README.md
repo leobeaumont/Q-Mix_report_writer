@@ -124,7 +124,7 @@ Pre-trained QMIX checkpoints and evaluation results from our runs are included i
 | LC, HE, MMLU, AIME, B-AIME, HMMT | GPT-OSS:120B | `agent_baseline/results/` |
 | LC, HE, MMLU, AIME, B-AIME, HMMT | Gemini Flash Lite | `agent_baseline/results_gemini/` |
 | HLE (250 MCQ) | GPT-OSS:120B | `agent_baseline/results_hle_gpt_oss/` |
-| HLE (250 MCQ) | Gemini Flash Lite | `agent_baseline/results_hle_gemini/` |
+| HLE (250 MCQ) | Gemini Flash Lite | `agent_baseline/results_hle_gemini_pro/` |
 
 ## Project Structure
 

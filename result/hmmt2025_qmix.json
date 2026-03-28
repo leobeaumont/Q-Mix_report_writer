@@ -1,0 +1,416 @@
+{
+  "timestamp": "2026-03-28T16:06:15.113890",
+  "metrics": {
+    "accuracy": 0.43333333333333335,
+    "partial_accuracy": 0.43333333333333335,
+    "total": 30,
+    "correct": 13,
+    "total_tokens": 228867,
+    "avg_tokens": 7628.9,
+    "total_cost": 0.0
+  },
+  "metadata": {
+    "dataset": "hmmt_2025",
+    "llm": "openai/gpt-oss-120b",
+    "model_path": "checkpoints/qmix_unified.pt",
+    "n_agents": 3,
+    "agent_names": [
+      "MathSolver",
+      "MathSolver",
+      "AnalyzeAgent"
+    ],
+    "num_rounds": 3
+  },
+  "results": [
+    {
+      "task_id": "1",
+      "score": 1.0,
+      "tokens_used": 4264,
+      "prediction": "The answer is 103",
+      "ground_truth": "103",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "2",
+      "score": 1.0,
+      "tokens_used": 2051,
+      "prediction": "3375",
+      "ground_truth": "3375",
+      "actions": [
+        0,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "3",
+      "score": 0.0,
+      "tokens_used": 13653,
+      "prediction": "We need to verify the answer 576. Let's solve.\n\nWe have equations:\n\n1) x^{log_2(yz)} = 2^8 * 3^4.\n2) y^{log_2(zx)} = 2^9 * 3^6.\n3) z^{log_2(xy)} = 2^5 * 3^{10}.\n\nLet’s denote a = log_2 x, b = log_2 y, c = log_2 z. Since x,y,z positive.\n\nThen x = 2^a, y = 2^b, z = 2^c.\n\nNow compute log_2(yz) = log_2 y + log_2 z = b + c.\n\nEquation 1: (2^a)^{b+c} = 2^{a(b+c)} = 2^8 * 3^4.\n\nSimilarly, equation 2: (2^b)^{c+a} = 2^{b(c+a)} = 2^9 * 3^6.\n\nEquation 3: (2^c)^{a+b} = 2^{c(a+b)} = 2^5 * 3^{10}.\n\nThus we hav",
+      "ground_truth": "\\frac{1}{576}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "4",
+      "score": 1.0,
+      "tokens_used": 1418,
+      "prediction": "The answer is -984",
+      "ground_truth": "-984",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "5",
+      "score": 1.0,
+      "tokens_used": 2933,
+      "prediction": "The minimal degree for a non‑constant monic integer polynomial \\(P\\) satisfying \\(P(\\sqrt3+\\sqrt2)=P(\\sqrt3-\\sqrt2)\\) is \\(3\\).  \nAll such cubics have the form  \n\n\\[\nQ(x)=x^{3}-11x+c\\qquad(c\\in\\mathbb Z).\n\\]\n\nHence  \n\n\\[\nQ(10)-Q(0)=\\bigl(10^{3}-11\\cdot10+c\\bigr)-c=1000-110=890.\n\\]\n\n\\[\n\\boxed{890}\n\\]",
+      "ground_truth": "890",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "6",
+      "score": 1.0,
+      "tokens_used": 1354,
+      "prediction": "The ratio \\( \\dfrac{r}{2025!} \\) equals \\(\\dfrac{1311}{2017}\\).  \n\nThe answer is 1311/2017",
+      "ground_truth": "\\frac{1311}{2017}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "7",
+      "score": 1.0,
+      "tokens_used": 10989,
+      "prediction": "9/√23",
+      "ground_truth": "\\frac{9 \\sqrt{23}}{23}",
+      "actions": [
+        4,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "8",
+      "score": 0.0,
+      "tokens_used": 2260,
+      "prediction": "The series converges to a constant value. Computing many terms (e.g., the first 60 terms) with high‑precision arithmetic gives  \n\n\\[\n\\sum_{n=1}^{\\infty}\\frac{\\operatorname{sgn}(\\sin 2^{n})}{2^{n}}\\approx 0.3634033203125\\;,\n\\]\n\nand the remaining tail is bounded by \\(2^{-13}<1.3\\times10^{-4}\\). Hence the sum is  \n\n\\[\n\\boxed{0.3634\\text{ (approximately)}}\n\\]",
+      "ground_truth": "1-\\frac{2}{\\pi}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "9",
+      "score": 1.0,
+      "tokens_used": 2706,
+      "prediction": "The coefficient of \\(x^{2025}\\) in the interpolating polynomial \\(f\\) is congruent modulo the prime \\(2027\\) to  \n\n\\[\n-\\sum_{i=1}^{45} i^{2}.\n\\]\n\nIndeed, using Lagrange interpolation over the points \\(1,2,\\dots ,2027\\) and the fact that for a prime \\(p\\)\n\n\\[\n\\binom{p-1}{m}\\equiv (-1)^m \\pmod p,\n\\]\n\nthe leading‑coefficient computation reduces to \\(-\\sum i^{2}\\) (the sum of the squares of the \\(45\\) perfect squares \\(\\le 2027\\)).  \n\n\\[\n\\sum_{i=1}^{45} i^{2}= \\frac{45\\cdot46\\cdot91}{6}=31\\,395\\equi",
+      "ground_truth": "1037",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "10",
+      "score": 0.0,
+      "tokens_used": 19866,
+      "prediction": "We need to find the two possible values of a+b+c for distinct complex numbers satisfying a^2 = b+6, b^2 = c+6, c^2 = a+6.\n\nWe derived that S = a+b+c satisfies quadratic S^2 + S - 148 = 0, giving S = (-1 ± sqrt(593))/2.\n\nWe need to verify correctness.\n\nLet's verify quickly by plugging into original equations using algebraic reasoning.\n\nWe can attempt to derive S directly.\n\nLet’s denote the three equations:\n\n(1) b = a^2 - 6\n(2) c = b^2 - 6\n(3) a = c^2 - 6\n\nCompose: a = ((a^2 -6)^2 -6)^2 -6.\n\nDefin",
+      "ground_truth": "\\frac{-1+\\sqrt{17}}{2}, \\frac{-1-\\sqrt{17}}{2}",
+      "actions": [
+        4,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "11",
+      "score": 1.0,
+      "tokens_used": 11235,
+      "prediction": "The adjacency restrictions force 7 to be placed between 1 and 2, and the remaining numbers must form a Hamiltonian path with ends 1 and 2.  \nThere are 4 admissible orders for the set \\(\\{3,4,5,6\\}\\); each can be combined with the two possible orientations of the block \\(1\\!-\\!7\\!-\\!2\\), giving \\(4\\times2=8\\) distinct circular arrangements when rotations are identified.  \n\nSince rotations are counted as different, each of these 8 arrangements can be rotated to 7 distinct positions, yielding  \n\n\\[",
+      "ground_truth": "56",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "12",
+      "score": 0.0,
+      "tokens_used": 7063,
+      "prediction": "We need to compute number of ways to remove 4 lily pads from 3x3 grid (9 cells) such that start (bottom-left) and target (top-right) remain, and there is no path between them using orthogonal adjacency.\n\nWe have code that enumerates combos of 4 cells among the 7 other cells (since start and target fixed). Count combos where reachable is false.\n\nWe need to compute that number. Let's compute manually or reason.\n\nLet's label grid coordinates: rows 1 top, 3 bottom; columns 1 left, 3 right.\n\nStart S ",
+      "ground_truth": "29",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "13",
+      "score": 0.0,
+      "tokens_used": 11515,
+      "prediction": "Let  \n\n* the 16 balls be the vertices \\(1,2,\\dots ,16\\) of a line,  \n* an edge join two consecutive numbers \\(i,i+1\\).\n\nIf two balls are in the same box, the induced subgraph on the vertices of that box must have **minimum degree ≥ 1** (otherwise a ball would have no neighbour in its box).  \nFor a set of four vertices this forces the subgraph to be either  \n\n* a path of four consecutive vertices (a run of four numbers), or  \n* two disjoint edges \\((i,i+1)\\) and \\((j,j+1)\\) (two separate adjacent",
+      "ground_truth": "105",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "14",
+      "score": 0.0,
+      "tokens_used": 3011,
+      "prediction": "The answer is 36",
+      "ground_truth": "2304",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "15",
+      "score": 0.0,
+      "tokens_used": 5972,
+      "prediction": "The maximum number of doors that can be traversed is  \n\n\\[\n220 - 18 = 202 .\n\\]\n\nThe answer is 202",
+      "ground_truth": "200",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "16",
+      "score": 0.0,
+      "tokens_used": 12944,
+      "prediction": "We have a problem: number of ways to pick two rectangles in a 5x5 grid of squares (grid lines 6x6 points). Rectangles edges lie on grid lines. Rectangles cannot overlap at interiors, edges, or vertices (i.e., they must be disjoint, no touching). Order doesn't matter.\n\nAgent pmQn says answer 6300. Need to verify.\n\nWe need to compute total number of unordered pairs of axis-aligned rectangles with no touching.\n\nFirst count total rectangles in 5x5 grid: choose two distinct vertical grid lines among ",
+      "ground_truth": "6300",
+      "actions": [
+        0,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "17",
+      "score": 0.0,
+      "tokens_used": 7231,
+      "prediction": "The condition forces, for each letter \\(L\\), that the multiset of letters between its first and second occurrence equals the multiset between its second and third occurrence.  \nSince every other letter appears exactly three times, the only way this can happen is that each of those two gaps contains each other letter either 0 times or exactly once; consequently each gap contains the same subset of the other 25 letters, each at most once.\n\nWriting the 78‑letter word as three consecutive blocks of ",
+      "ground_truth": "2^{25} \\cdot 26!",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "18",
+      "score": 0.0,
+      "tokens_used": 2324,
+      "prediction": "The expected number of distinct values after 100 seconds equals the expected number of original entries that are the maximum in their own \\((2\\cdot100+1)=201\\)‑element neighbourhood.  \nFor any fixed position, the \\(201\\) values in its neighbourhood are i.i.d. and continuous, so each of the \\(201\\) positions is equally likely to contain the largest value. Hence  \n\n\\[\n\\Pr(\\text{position }i\\text{ is the neighbourhood maximum})=\\frac1{201}.\n\\]\n\nBy linearity of expectation, the expected number of suc",
+      "ground_truth": "\\frac{2025}{101}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "19",
+      "score": 0.0,
+      "tokens_used": 2881,
+      "prediction": "\\frac{5}{6}",
+      "ground_truth": "\\frac{4}{9}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "20",
+      "score": 0.0,
+      "tokens_used": 4969,
+      "prediction": "The expected number of seconds until only one snake remains is approximately 540.",
+      "ground_truth": "\\frac{448}{3}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "21",
+      "score": 1.0,
+      "tokens_used": 3949,
+      "prediction": "The configuration can be placed on a coordinate plane with \\(B=(0,0)\\) and \\(C=(45,0)\\).  \nSince \\(ABC\\) is equilateral, its height is \\(\\frac{45\\sqrt3}{2}=22.5\\sqrt3\\), giving  \n\\(A=(22.5,\\,22.5\\sqrt3)\\).\n\nPoints on \\(BC\\): \\(E=(14,0)\\) and \\(F=(29,0)\\).  \nTriangle \\(DEF\\) is equilateral with side \\(EF=15\\); its third vertex is directly above the midpoint of \\(EF\\).  \nMidpoint \\(M=(21.5,0)\\) and the height of an equilateral triangle of side \\(15\\) is \\(\\frac{15\\sqrt3}{2}=7.5\\sqrt3\\).  \nThus \\(D",
+      "ground_truth": "26",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "22",
+      "score": 1.0,
+      "tokens_used": 2410,
+      "prediction": "The four tip heights are  \n\n\\[\n25,\\;49,\\;H-16,\\;H-36 .\n\\]\n\nFor the tips to be the vertices of a square, the four \\(y\\)-coordinates must be symmetric about the square’s centre.  \nHence the average of the four heights must be the centre height \\(y_0\\):\n\n\\[\ny_0=\\frac{25+49+(H-16)+(H-36)}{4}= \\frac{2H+22}{4}= \\frac{H+11}{2}.\n\\]\n\nSubtracting \\(y_0\\) from each height gives the deviations  \n\n\\[\n\\frac{39-H}{2},\\;\\frac{87-H}{2},\\;\\frac{H-43}{2},\\;\\frac{H-83}{2}.\n\\]\n\nThese four numbers must come in opposi",
+      "ground_truth": "63",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "23",
+      "score": 1.0,
+      "tokens_used": 2029,
+      "prediction": "The configuration forces the side length of the square to be \\(\\sqrt{10}\\) and the distances from \\(P\\) to the vertices become \\(\\sqrt2,\\;2\\sqrt2,\\;\\sqrt{10},\\;2\\). Their product is  \n\n\\[\n\\sqrt2\\cdot2\\sqrt2\\cdot\\sqrt{10}\\cdot2 = 8\\sqrt{10}.\n\\]\n\n**The answer is 8√10**",
+      "ground_truth": "8\\sqrt{10}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "24",
+      "score": 0.0,
+      "tokens_used": 16859,
+      "prediction": "The product \\(AC\\cdot CB\\) equals \\(4\\).",
+      "ground_truth": "20",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "25",
+      "score": 0.0,
+      "tokens_used": 20013,
+      "prediction": "We need to solve quadratic for q.\n\nCompute 4*24.979*65.791 = 99.916 *65.791 ≈ 6575. (since 100*65.791=6579.1 minus 0.084*65.791≈5.5) So approx 6573.6.\n\nAdd to 2638.5 gives D≈9212.1.\n\nsqrt D ≈ 95.99 (since 96^2=9216). So sqrt ≈95.99.\n\nThus q = [ -51.36 ± 95.99 ] / (2*24.979≈49.958).\n\nWe need q positive (since P inside triangle above BC). So take (+): (-51.36 +95.99)=44.63. Divide by 49.958 ≈0.893.\n\nThus q ≈0.893.\n\nNow compute XP^2 = 11 -6√3 q. Compute √3≈1.732, 6√3≈10.392. Multiply by q: 10.392*0",
+      "ground_truth": "\\sqrt{23}-2 \\sqrt{3}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "26",
+      "score": 1.0,
+      "tokens_used": 3173,
+      "prediction": "The four circumcenters are  \n\n\\[\n\\begin{aligned}\nO_{ABC}&=\\Bigl(\\tfrac{11}{2},\\;\\frac{141}{2\\sqrt{15}}\\Bigr),\\\\[2pt]\nO_{BCD}&=\\Bigl(\\tfrac{17}{2},\\;\\frac{99}{2\\sqrt{15}}\\Bigr),\\\\[2pt]\nO_{CDA}&=\\Bigl(\\tfrac{17}{2},\\;\\frac{33}{2\\sqrt{15}}\\Bigr),\\\\[2pt]\nO_{DAB}&=\\Bigl(\\tfrac{11}{2},\\;\\frac{27}{2\\sqrt{15}}\\Bigr).\n\\end{aligned}\n\\]\n\nTaking them in the natural cyclic order  \n\\(O_{ABC}\\to O_{BCD}\\to O_{CDA}\\to O_{DAB}\\) gives a convex quadrilateral.\nUsing the shoelace formula:\n\n\\[\n\\begin{aligned}\nS_1 &=",
+      "ground_truth": "9\\sqrt{15}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "27",
+      "score": 0.0,
+      "tokens_used": 19357,
+      "prediction": "We need to decide which agent's answer is reliable. We have only one agent's response (Agent NQEr) which gave a messy expression and approximate ratio 0.552, but later we computed using coordinates gave ratio ~0.3895, indicating inconsistency. The coordinate calculation may be wrong due to incorrect P coordinates. Need to verify.\n\nLet's solve problem properly.\n\nWe have triangle ABC with sides AB=6, AC=8, BC=7.\n\nLet’s place coordinates: A at (0,0), B at (6,0). Find C coordinates using law of cosi",
+      "ground_truth": "\\frac{7}{18}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "28",
+      "score": 1.0,
+      "tokens_used": 2671,
+      "prediction": "The distance \\(MD\\) equals \\(\\sqrt{6}\\). The answer is \\(\\sqrt{6}\\).",
+      "ground_truth": "\\sqrt{6}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "29",
+      "score": 0.0,
+      "tokens_used": 20694,
+      "prediction": "We need to solve for v (positive) satisfying:\n\n(P - 56/v)^2 = 113,472 - 576 v^2 - 112,896 / v^2.\n\nMultiply both sides by v^2:\n\n(P v - 56)^2 = v^2 (113,472 - 576 v^2) - 112,896.\n\nCompute left: (P v -56)^2.\n\nNow compute P v = (2 v^2 +14 v -296) v = 2 v^3 +14 v^2 -296 v.\n\nThus left side L = (2 v^3 +14 v^2 -296 v -56)^2.\n\nRight side R = v^2 *113,472 - 576 v^4 -112,896.\n\nSimplify R: 113,472 v^2 - 576 v^4 -112,896.\n\nNow we have polynomial equation:\n\n(2 v^3 +14 v^2 -296 v -56)^2 = -576 v^4 +113,472 v^2",
+      "ground_truth": "14+4\\sqrt{37}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    },
+    {
+      "task_id": "30",
+      "score": 0.0,
+      "tokens_used": 7073,
+      "prediction": "We need to evaluate the problem: plane intersecting rectangular prism yields a hexagon with given side lengths in order. Need distance from center of prism to plane. The agent wrote code to solve system of equations for half-dimensions a,b,c, normal components u,v,w, and signed distance t. We need to compute answer. Let's run the code mentally? Could attempt reasoning: The hexagon is formed by intersecting a plane with a rectangular box; the intersection polygon is a convex hexagon when plane cu",
+      "ground_truth": "\\sqrt{\\frac{95}{24}}",
+      "actions": [
+        1,
+        2,
+        2
+      ],
+      "cost": 0.0
+    }
+  ]
+}
