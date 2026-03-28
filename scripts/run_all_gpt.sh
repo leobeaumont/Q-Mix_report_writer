@@ -45,7 +45,7 @@ python3 -m experiments.run_qmix_train \
     --batch_size 8 \
     --data_limit 15 \
     --token_penalty 0.10 \
-    --accuracy_weight 1.25 \
+    --accuracy_weight 1.50 \
     --device "$DEVICE" \
     --save_path "$CKPT_DIR/qmix_unified.pt" \
     --log_interval 10 \
