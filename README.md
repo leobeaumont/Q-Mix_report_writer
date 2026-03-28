@@ -80,7 +80,7 @@ The `agent_baseline/` directory contains the framework comparison baselines used
 | **AutoGen** | Multi-agent group chat (`RoundRobinGroupChat`) | [microsoft/autogen](https://github.com/microsoft/autogen) |
 | **LangGraph** | Multi-node graph workflow (`StateGraph`) | [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph) |
 | **Agent Framework** | Orchestrated agent pipeline | [microsoft/agent-framework](https://github.com/microsoft/agent-framework) |
-| **Lobster** | Single-agent baseline (direct API call) | — |
+| **Lobster** | Single-agent baseline (direct API call) | [openclaw/lobster](https://github.com/openclaw/lobster) |
 
 We thank the developers of these open-source frameworks for making their tools publicly available.
 
