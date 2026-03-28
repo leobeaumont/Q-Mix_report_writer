@@ -59,17 +59,27 @@ bash scripts/run_hle_gpt.sh
 | MMLU-Pro | `TIGER-Lab/MMLU-Pro` | test | 12k | 15 | Agentic |
 | AIME 2024 | `Maxwell-Jia/AIME_2024` | train | 30 | 15 | Math |
 
-### Testing (9 benchmarks)
+### Testing (8 benchmarks)
 
-| # | Dataset | HuggingFace Path | Split | Samples | Category | Script |
-|---|---------|-----------------|-------|---------|----------|--------|
-| 1 | LiveCodeBench | `livecodebench/code_generation` | test | 400 | Coding | `run_test_livecodebench.sh` |
-| 2 | HumanEval | `openai_humaneval` | test | 164 | Coding | `run_test_humaneval.sh` |
-| 3 | MMLU-Pro | `TIGER-Lab/MMLU-Pro` | validation | 70 | Agentic | `run_test_mmlu_pro.sh` |
-| 4 | AIME 2025 | `MathArena/aime_2025` | train | 30 | Math | `run_test_aime2025.sh` |
-| 5 | AIME 2026 | `MathArena/aime_2026` | train | 30 | Math | `run_test_aime2026.sh` |
-| 6 | Beyond-AIME | `ByteDance-Seed/BeyondAIME` | test | 100 | Math | `run_test_beyond_aime.sh` |
-| 7 | HMMT Feb 2025 | `MathArena/hmmt_feb_2025` | train | 30 | Math | `run_test_hmmt2025.sh` |
+| # | Dataset | HuggingFace Path | Split | Samples | Category |
+|---|---------|-----------------|-------|---------|----------|
+| 1 | LiveCodeBench | `livecodebench/code_generation` | test | 400 | Coding |
+| 2 | HumanEval | `openai_humaneval` | test | 164 | Coding |
+| 3 | MMLU-Pro | `TIGER-Lab/MMLU-Pro` | validation | 70 | Reasoning |
+| 4 | AIME 2025 | `MathArena/aime_2025` | train | 30 | Math |
+| 5 | AIME 2026 | `MathArena/aime_2026` | train | 30 | Math |
+| 6 | Beyond-AIME | `ByteDance-Seed/BeyondAIME` | test | 100 | Math |
+| 7 | HMMT Feb 2025 | `MathArena/hmmt_feb_2025` | train | 30 | Math |
+| 8 | HLE (MCQ) | `cais/hle` | test | 250 | Mixed |
+
+### Scripts
+
+| Script | Model | What it does | Results |
+|---|---|---|---|
+| `scripts/run_all_gpt.sh` | GPT-OSS:120B | Train + eval benchmarks 1-7 | `result_gpt/` |
+| `scripts/run_all_gemini.sh` | Gemini Flash Lite | Train + eval benchmarks 1-8 | `result_gemini/` |
+| `scripts/run_hle_gpt.sh` | GPT-OSS:120B | Eval HLE (uses existing checkpoint) | `result_hle_gpt/` |
+| `scripts/run_hle_gemini.sh` | Gemini Flash Lite | Eval HLE (uses existing checkpoint) | `result_hle_gemini/` |
 
 ## Agent Baseline
 
@@ -85,6 +95,36 @@ The `agent_baseline/` directory contains the framework comparison baselines used
 We thank the developers of these open-source frameworks for making their tools publicly available.
 
 See [`agent_baseline/README.md`](agent_baseline/README.md) for setup and usage instructions.
+
+
+## Reproducibility
+
+Pre-trained QMIX checkpoints and evaluation results from our runs are included in the repository.
+
+### Checkpoints
+
+| Model | Path |
+|---|---|
+| GPT-OSS:120B | `checkpoints/qmix_unified.pt` |
+| Gemini Flash Lite | `checkpoints_gemini/qmix_unified.pt` |
+
+### Agent Q-Mix Results
+
+| Benchmarks | Model | Path |
+|---|---|---|
+| LC, HE, MMLU, AIME, B-AIME, HMMT | GPT-OSS:120B | `result/result_gpt/` |
+| LC, HE, MMLU, AIME, B-AIME, HMMT | Gemini Flash Lite | `result/result_gemini/` |
+| HLE (250 MCQ) | GPT-OSS:120B | `result/result_hle_gpt/` |
+| HLE (250 MCQ) | Gemini Flash Lite | `result/result_hle_gemini/` |
+
+### Framework Baseline Results
+
+| Benchmarks | Model | Path |
+|---|---|---|
+| LC, HE, MMLU, AIME, B-AIME, HMMT | GPT-OSS:120B | `agent_baseline/results/` |
+| LC, HE, MMLU, AIME, B-AIME, HMMT | Gemini Flash Lite | `agent_baseline/results_gemini/` |
+| HLE (250 MCQ) | GPT-OSS:120B | `agent_baseline/results_hle_gpt_oss/` |
+| HLE (250 MCQ) | Gemini Flash Lite | `agent_baseline/results_hle_gemini_pro/` |
 
 ## Project Structure
 
