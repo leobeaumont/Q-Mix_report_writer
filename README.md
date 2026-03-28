@@ -56,7 +56,7 @@ bash scripts/run_hle_gpt.sh
 | Dataset | HuggingFace Path | Split | Total | Used | Domain |
 |---------|-----------------|-------|-------|------|--------|
 | LiveCodeBench TestGen | `livecodebench/test_generation` | test | 442 | 15 | Coding |
-| MMLU-Pro | `TIGER-Lab/MMLU-Pro` | test | 70 | 15 | Agentic |
+| MMLU-Pro | `TIGER-Lab/MMLU-Pro` | test | 12k | 15 | Agentic |
 | AIME 2024 | `Maxwell-Jia/AIME_2024` | train | 30 | 15 | Math |
 
 ### Testing (9 benchmarks)
