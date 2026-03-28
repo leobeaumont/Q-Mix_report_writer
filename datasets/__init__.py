@@ -8,6 +8,7 @@ from .math_dataset import (
 from .livecodebench_dataset import LiveCodeBenchDataset, LiveCodeBenchTestGenDataset
 from .gaia_dataset import GAIADataset
 from .frontierscience_dataset import FrontierScienceDataset
+from .hle_dataset import HLEDataset
 
 DATASET_REGISTRY = {
     # Coding
@@ -24,6 +25,7 @@ DATASET_REGISTRY = {
     "aime_2026": AIME2026Dataset,
     "beyond_aime": BeyondAIMEDataset,
     "hmmt_2025": HMMT2025Dataset,
+    "hle": HLEDataset,
 }
 
 

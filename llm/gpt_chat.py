@@ -77,6 +77,8 @@ async def achat(model_name: str, messages: list, max_tokens: int = 1024, tempera
 @LLMRegistry.register("google/gemma-3-12b-it")
 @LLMRegistry.register("Qwen/Qwen3-14B")
 @LLMRegistry.register("openai/gpt-oss-120b")
+@LLMRegistry.register("mercury-2")
+@LLMRegistry.register("gemini-3.1-flash-lite-preview")
 class GPTChat(LLM):
     def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024):
         self.model_name = model_name

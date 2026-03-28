@@ -45,6 +45,7 @@ DOMAIN_MAP = {
     "aime_2026": "aime",
     "beyond_aime": "aime",
     "hmmt_2025": "hmmt",
+    "hle": "hle",
 }
 
 AGENT_CONFIGS = {
@@ -59,6 +60,7 @@ AGENT_CONFIGS = {
     "aime_2026": ["MathSolver", "MathSolver", "AnalyzeAgent"],
     "beyond_aime": ["MathSolver", "MathSolver", "AnalyzeAgent"],
     "hmmt_2025": ["MathSolver", "MathSolver", "AnalyzeAgent"],
+    "hle": ["ReasoningAgent", "ReasoningAgent", "AnalyzeAgent"],
 }
 
 
@@ -124,18 +126,47 @@ async def run_episode(
 
 
 async def train(args):
-    """Main training loop."""
-    dataset_name = args.dataset
-    domain = DOMAIN_MAP.get(dataset_name, dataset_name)
-    agent_names = AGENT_CONFIGS.get(dataset_name, ["ReasoningAgent"] * 3)
-    n_agents = len(agent_names)
+    """Main training loop. Supports single-dataset or multi-dataset interleaved training."""
+    dataset_names = [d.strip() for d in args.dataset.split(",")]
+    is_multi = len(dataset_names) > 1
+
+    all_datasets = []
+    all_domains = []
+    all_agent_names = []
+    n_agents = None
+
+    for ds_name in dataset_names:
+        domain = DOMAIN_MAP.get(ds_name, ds_name)
+        agents = AGENT_CONFIGS.get(ds_name, ["ReasoningAgent"] * 3)
+        if n_agents is None:
+            n_agents = len(agents)
+        ds = get_dataset(ds_name, split=args.split, limit=args.data_limit, data_path=args.data_path)
+        if len(ds) == 0:
+            logger.error(f"No samples loaded for {ds_name}. Check that HuggingFace 'datasets' library "
+                          f"is installed (`pip install datasets`) and can access the internet, or provide "
+                          f"--data_path to a local JSONL file.")
+            continue
+        all_datasets.append(ds)
+        all_domains.append(domain)
+        all_agent_names.append(agents)
+        logger.info(f"Dataset loaded: {ds_name} ({len(ds)} samples, domain={domain})")
+
+    if not all_datasets:
+        logger.error("No datasets loaded. Aborting.")
+        return
+
+    label = ",".join(dataset_names)
 
     print()
     print("=" * 60)
-    print(f"  QMIX TRAINING: {dataset_name.upper()}")
+    if is_multi:
+        print(f"  QMIX UNIFIED TRAINING: {label.upper()}")
+    else:
+        print(f"  QMIX TRAINING: {label.upper()}")
     print("=" * 60)
     print(f"  LLM:       {args.llm_name}")
-    print(f"  Agents:    {agent_names}")
+    print(f"  Datasets:  {dataset_names}")
+    print(f"  Agents:    {[a for a in all_agent_names]}")
     print(f"  Episodes:  {args.num_episodes}")
     print(f"  Rounds:    {args.num_rounds}")
     print(f"  Device:    {args.device}")
@@ -160,14 +191,9 @@ async def train(args):
         device=args.device,
     )
 
-    dataset = get_dataset(dataset_name, split=args.split, limit=args.data_limit, data_path=args.data_path)
-    logger.info(f"Dataset loaded: {len(dataset)} samples")
-
-    if len(dataset) == 0:
-        logger.error(f"No samples loaded for {dataset_name}. Check that HuggingFace 'datasets' library "
-                      f"is installed (`pip install datasets`) and can access the internet, or provide "
-                      f"--data_path to a local JSONL file.")
-        return
+    if args.resume_path and os.path.exists(args.resume_path):
+        trainer.load(args.resume_path)
+        logger.info(f"Resumed from checkpoint: {args.resume_path}")
 
     epsilon = args.epsilon_start
     epsilon_decay = (args.epsilon_start - args.epsilon_end) / max(args.num_episodes, 1)
@@ -176,9 +202,16 @@ async def train(args):
     import time as _time
     _train_start = _time.time()
 
+    n_ds = len(all_datasets)
+
     for ep_idx in range(args.num_episodes):
         _ep_start = _time.time()
-        sample = dataset[ep_idx % len(dataset)]
+
+        ds_idx = ep_idx % n_ds
+        dataset = all_datasets[ds_idx]
+        domain = all_domains[ds_idx]
+        agent_names = all_agent_names[ds_idx]
+        sample = dataset[(ep_idx // n_ds) % len(dataset)]
 
         graph = QMIXGraph(
             domain=domain,
@@ -211,13 +244,13 @@ async def train(args):
         _avg_ep_time = _total_elapsed / (ep_idx + 1)
         _remaining = _avg_ep_time * (args.num_episodes - ep_idx - 1)
 
-        problem_idx = ep_idx % len(dataset)
+        ds_label = dataset_names[ds_idx]
         task_preview = sample.task[:80].replace("\n", " ")
         answer_preview = answer_text[:120].replace("\n", " ")
         loss_str = f"loss={train_info['loss']:.4f}" if train_info else "loss=n/a"
 
         print(f"\n--- Episode {ep_idx+1}/{args.num_episodes} "
-              f"[problem #{problem_idx}, {_ep_elapsed:.1f}s] ---")
+              f"[{ds_label}, {_ep_elapsed:.1f}s] ---")
         print(f"  Task:   {task_preview}...")
         print(f"  Output: {answer_preview}...")
         print(f"  acc={accuracy:.2f} | reward={reward:.3f} | "
@@ -237,7 +270,7 @@ async def train(args):
     avg_t = trainer.replay_buffer.avg_tokens
     print()
     print("=" * 60)
-    print(f"  TRAINING COMPLETE: {dataset_name.upper()}")
+    print(f"  TRAINING COMPLETE: {label.upper()}")
     print("=" * 60)
     print(f"  Best Reward:  {best_reward:.4f}")
     print(f"  Avg Reward:   {avg_r:.4f}")
@@ -251,7 +284,9 @@ async def train(args):
 
 def main():
     parser = argparse.ArgumentParser(description="QMIX Training for Multi-Agent Topology Optimization")
-    parser.add_argument("--dataset", type=str, required=True, choices=list(DOMAIN_MAP.keys()))
+    parser.add_argument("--dataset", type=str, required=True,
+                        help="Single dataset name or comma-separated list for unified training "
+                             "(e.g. 'livecodebench_testgen,mmlu_pro,aime_2024')")
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini")
     parser.add_argument("--decision_method", type=str, default="FinalRefer")
@@ -271,6 +306,8 @@ def main():
     parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--save_path", type=str, default=None)
+    parser.add_argument("--resume_path", type=str, default=None,
+                        help="Path to an existing checkpoint to resume training from")
     parser.add_argument("--log_interval", type=int, default=10)
     args = parser.parse_args()
 

@@ -39,10 +39,10 @@ class FinalRefer(Node):
         self.role = "Final Decision Maker"
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
-        system_prompt = (
-            "You are the final decision-maker. Review all agents' responses carefully "
-            "and synthesize the best answer. Be precise and give your final answer clearly."
-        )
+        decision_role = self.prompt_set.get_decision_role().strip()
+        decision_constraint = self.prompt_set.get_decision_constraint().strip()
+        system_prompt = f"{decision_role}\n\n{decision_constraint}"
+
         spatial_str = ""
         for id, info in spatial_info.items():
             spatial_str += f"Agent {id} ({info['role']}):\n{info['output']}\n\n"

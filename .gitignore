@@ -2,8 +2,17 @@ __pycache__/
 *.pyc
 *.pyo
 .env
-checkpoints/
-result/
 .DS_Store
 .vscode/
 .idea/
+
+# Exclude ablation and mercury
+checkpoints_ablation/
+checkpoints_ablation_gpt/
+result_ablation/
+result_ablation_gpt/
+checkpoints_mercury/
+result_mercury/
+scripts/run_all_mercury.sh
+scripts/run_gpt_ablation.sh
+scripts/run_all_gemini_ablation.sh
