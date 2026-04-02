@@ -5,6 +5,8 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+*.pt
+*.log
 
 # Exclude ablation and mercury
 checkpoints_ablation/
