@@ -1,85 +1,70 @@
 import aiohttp
-import os
 from typing import List, Union, Optional
 from tenacity import retry, wait_random_exponential, stop_after_attempt
-from dotenv import load_dotenv
 
 from .format import Message
-from .price import cost_count
 from .llm import LLM
 from .llm_registry import LLMRegistry
-
-load_dotenv()
-_RAW_BASE_URL = os.getenv("BASE_URL") or os.getenv("OPENAI_API_BASE")
-_RAW_API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+from utils.config import get_llm_config
 
 
-def _build_chat_endpoint(base_url: Optional[str]) -> str:
-    default = "https://api.openai.com/v1/chat/completions"
-    if not base_url:
-        return default
+def _build_ollama_endpoint(base_url: str) -> str:
     base_url = base_url.rstrip("/")
     if base_url.endswith("/chat/completions"):
         return base_url
-    return f"{base_url}/chat/completions"
+    if base_url.endswith("/v1"):
+        return f"{base_url}/chat/completions"
+    return f"{base_url}/v1/chat/completions"
 
 
-MINE_BASE_URL = _build_chat_endpoint(_RAW_BASE_URL)
-MINE_API_KEYS = _RAW_API_KEY
+def _get_ollama_endpoint() -> str:
+    """Read the Ollama base URL from default.yaml at call time, so config changes are picked up."""
+    llm_config = get_llm_config()
+    base_url = llm_config.get("ollama_base_url", "http://localhost:11434")
+    return _build_ollama_endpoint(base_url)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
-async def achat(model_name: str, messages: list, max_tokens: int = 1024, temperature: float = 0.2):
+async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, temperature: float = 0.2):
+    endpoint = _get_ollama_endpoint()
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {MINE_API_KEYS}",
     }
     data = {
         "model": model_name,
         "messages": [m.to_dict() if isinstance(m, Message) else m for m in messages],
         "stream": False,
-        "max_tokens": max(max_tokens, 4096),
+        "max_tokens": max_tokens,
         "temperature": temperature,
     }
     async with aiohttp.ClientSession() as session:
-        async with session.post(MINE_BASE_URL, headers=headers, json=data) as response:
+        async with session.post(endpoint, headers=headers, json=data) as response:
             if "application/json" not in (response.headers.get("Content-Type") or ""):
                 text = await response.text()
                 raise aiohttp.ContentTypeError(
                     response.request_info,
                     history=response.history,
-                    message=f"Unexpected content-type at {MINE_BASE_URL}. Body: {text[:200]}",
+                    message=f"Unexpected content-type from Ollama at {endpoint}. Body: {text[:200]}",
                 )
             response_data = await response.json()
             if "choices" not in response_data:
-                error_message = response_data.get("error", {}).get("message", "Unknown error")
-                raise Exception(f"API Error: {error_message}")
-            prompt = "".join([m.content if isinstance(m, Message) else m.get("content", "") for m in messages])
+                error_message = response_data.get("error", {}).get("message", "Unknown error from Ollama")
+                raise Exception(f"Ollama API Error: {error_message}")
+
             msg = response_data["choices"][0]["message"]
             completion = msg.get("content") or ""
-            if not completion.strip() and msg.get("reasoning"):
-                completion = msg["reasoning"]
-            cost_count(prompt, completion, model_name)
             return completion
 
 
-@LLMRegistry.register("gpt-4o")
-@LLMRegistry.register("gpt-4o-mini")
-@LLMRegistry.register("gpt-4-turbo")
-@LLMRegistry.register("gpt-4")
-@LLMRegistry.register("gpt-3.5-turbo")
-@LLMRegistry.register("deepseek-chat")
-@LLMRegistry.register("deepseek-reasoner")
-@LLMRegistry.register("qwen-turbo")
-@LLMRegistry.register("qwen-plus")
-@LLMRegistry.register("qwen-max")
-@LLMRegistry.register("Qwen/Qwen3-8B")
-@LLMRegistry.register("google/gemma-3-12b-it")
-@LLMRegistry.register("Qwen/Qwen3-14B")
-@LLMRegistry.register("openai/gpt-oss-120b")
-@LLMRegistry.register("mercury-2")
-@LLMRegistry.register("gemini-3.1-flash-lite-preview")
-class GPTChat(LLM):
+# Register your locally available Ollama models here.
+# The name must match exactly what you have pulled in Ollama (run `ollama list` to check).
+@LLMRegistry.register("llama3.2")
+@LLMRegistry.register("llama3.1")
+@LLMRegistry.register("mistral")
+@LLMRegistry.register("qwen2.5")
+@LLMRegistry.register("deepseek-r1")
+@LLMRegistry.register("phi4")
+class OllamaChat(LLM):
     def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024):
         self.model_name = model_name
         self._temperature = temperature
@@ -102,7 +87,7 @@ class GPTChat(LLM):
         elif isinstance(messages, list) and all(isinstance(m, dict) for m in messages):
             messages = [Message(role=m["role"], content=m["content"]) for m in messages]
 
-        return await achat(self.model_name, messages, max_tokens=max_tokens, temperature=temperature)
+        return await achat_ollama(self.model_name, messages, max_tokens=max_tokens, temperature=temperature)
 
     def gen(
         self,

@@ -34,6 +34,7 @@ llm:
   default_model: gpt-4o-mini
   temperature: 0.2
   max_tokens: 1024
+  ollama_base_url: http://localhost:11434
 
 agent_configs:
   coding:
