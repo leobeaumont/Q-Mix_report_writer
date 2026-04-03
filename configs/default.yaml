@@ -31,9 +31,9 @@ evaluation:
   decision_method: FinalRefer
 
 llm:
-  default_model: gpt-4o-mini
+  default_model: tinyllama
   temperature: 0.2
-  max_tokens: 1024
+  max_tokens: 512
   ollama_base_url: http://localhost:11434
 
 agent_configs:

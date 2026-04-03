@@ -6,6 +6,7 @@ from .format import Message
 from .llm import LLM
 from .llm_registry import LLMRegistry
 from utils.config import get_llm_config
+from utils.globals import PromptTokens, CompletionTokens
 
 
 def _build_ollama_endpoint(base_url: str) -> str:
@@ -18,7 +19,7 @@ def _build_ollama_endpoint(base_url: str) -> str:
 
 
 def _get_ollama_endpoint() -> str:
-    """Read the Ollama base URL from default.yaml at call time, so config changes are picked up."""
+    """Read the Ollama base URL from default.yaml at call time."""
     llm_config = get_llm_config()
     base_url = llm_config.get("ollama_base_url", "http://localhost:11434")
     return _build_ollama_endpoint(base_url)
@@ -51,6 +52,12 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, 
                 error_message = response_data.get("error", {}).get("message", "Unknown error from Ollama")
                 raise Exception(f"Ollama API Error: {error_message}")
 
+            # Track token usage from Ollama's response into the global singletons
+            # so graph.arun() can compute total tokens and QMIX observations stay accurate
+            usage = response_data.get("usage", {})
+            PromptTokens.instance().value += usage.get("prompt_tokens", 0)
+            CompletionTokens.instance().value += usage.get("completion_tokens", 0)
+
             msg = response_data["choices"][0]["message"]
             completion = msg.get("content") or ""
             return completion
@@ -58,6 +65,7 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, 
 
 # Register your locally available Ollama models here.
 # The name must match exactly what you have pulled in Ollama (run `ollama list` to check).
+@LLMRegistry.register("tinyllama")
 @LLMRegistry.register("llama3.2")
 @LLMRegistry.register("llama3.1")
 @LLMRegistry.register("mistral")

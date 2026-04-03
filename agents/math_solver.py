@@ -2,7 +2,7 @@ from typing import List, Any, Dict
 
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
-from llm.llm_registry import LLMRegistry
+from utils.config import get_llm
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -10,7 +10,7 @@ from prompt.prompt_set_registry import PromptSetRegistry
 class MathSolver(Node):
     def __init__(self, id=None, role=None, domain="", llm_name=""):
         super().__init__(id, "MathSolver", domain, llm_name)
-        self.llm = LLMRegistry.get(llm_name, model_name=llm_name)
+        self.llm = get_llm(llm_name)
         self.prompt_set = PromptSetRegistry.get(domain)
         self.role = self.prompt_set.get_role() if role is None else role
         self.constraint = self.prompt_set.get_constraint(self.role)

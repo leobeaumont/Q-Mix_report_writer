@@ -11,6 +11,8 @@ from typing import List, Any, Optional, Dict
 from abc import ABC, abstractmethod
 import asyncio
 
+from utils.globals import PromptTokens, CompletionTokens
+
 
 class Node(ABC):
     """Base class for all agents in the QMIX multi-agent graph.
@@ -24,6 +26,7 @@ class Node(ABC):
         temporal_predecessors/successors: Cross-round connections
         outputs: Results from execution
         last_memory: Previous round's state for temporal processing
+        token_usage: Tokens consumed by this node (used in QMIX observations)
     """
 
     def __init__(
@@ -128,11 +131,20 @@ class Node(ABC):
         self.token_usage = 0
         spatial_info = self.get_spatial_info()
         temporal_info = self.get_temporal_info()
+
+        # Snapshot global token count before this node's LLM call
+        tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
+
         results = [self._execute(input, spatial_info, temporal_info, **kwargs)]
         for result in results:
             if not isinstance(result, list):
                 result = [result]
             self.outputs.extend(result)
+
+        # token_usage = tokens consumed by this specific node's call
+        self.token_usage = int(
+            PromptTokens.instance().value + CompletionTokens.instance().value - tokens_before
+        )
         return self.outputs
 
     async def async_execute(self, input: Any, **kwargs):
@@ -140,12 +152,21 @@ class Node(ABC):
         self.token_usage = 0
         spatial_info = self.get_spatial_info()
         temporal_info = self.get_temporal_info()
+
+        # Snapshot global token count before this node's LLM call
+        tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
+
         tasks = [asyncio.create_task(self._async_execute(input, spatial_info, temporal_info, **kwargs))]
         results = await asyncio.gather(*tasks, return_exceptions=False)
         for result in results:
             if not isinstance(result, list):
                 result = [result]
             self.outputs.extend(result)
+
+        # token_usage = tokens consumed by this specific node's call
+        self.token_usage = int(
+            PromptTokens.instance().value + CompletionTokens.instance().value - tokens_before
+        )
         return self.outputs
 
     @abstractmethod
