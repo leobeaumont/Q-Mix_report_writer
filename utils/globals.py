@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 class Singleton:
     _instance = None
 
@@ -34,3 +36,18 @@ class Time(Singleton):
 class Mode(Singleton):
     def __init__(self):
         self.value = ""
+
+class ReportState(Singleton):
+    def __init__(self):
+        self.content = ""
+        self.sources = []
+    
+    def reset(self):
+        self.content = ""
+        self.sources = []
+
+    def append(self, text: str, new_sources: Optional[List] = None):
+        self.content += text
+
+        if new_sources is not None:
+            self.sources += new_sources
