@@ -27,6 +27,7 @@ def _get_ollama_endpoint() -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
 async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, temperature: float = 0.2):
+    """Send a query to a LLM using oLLama."""
     endpoint = _get_ollama_endpoint()
     headers = {
         "Content-Type": "application/json",
