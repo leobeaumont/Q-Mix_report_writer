@@ -192,10 +192,10 @@ class QMIXGraph:
                 if not self._check_cycle(dst, {src}):
                     src.add_successor(dst, "spatial")
                     dst.add_successor(src, "spatial")
-            elif action == 6:  # append
+            elif action == 14:  # append
                 collector = self.nodes[self.node_ids[5]]
                 src.add_successor(collector, "spatial")
-            elif action == 7:  # terminate
+            elif action == 15:  # terminate
                 # TO DO, we need to define how the cycle is stopped and the output is returned
                 pass
 
