@@ -77,24 +77,19 @@ class QMIXGraph:
 
     def __init__(
         self,
-        domain: str,
         llm_name: str,
         agent_names: List[str],
         decision_method: str = "FinalRefer",
         fixed_topology: str = None,
     ):
         self.id = shortuuid.ShortUUID().random(length=4)
-        self.domain = domain
         self.llm_name = llm_name
         self.agent_names = agent_names
         self.nodes: Dict[str, Node] = {}
-        self.prompt_set = PromptSetRegistry.get(domain)
+        #self.prompt_set = PromptSetRegistry.get()
+        # NEED TO REDEFINE HOW TO ACCESS NEW PROMPTS waiting on prompt writing
 
         self._init_nodes()
-
-        self.decision_node = AgentRegistry.get(
-            decision_method, domain=self.domain, llm_name=self.llm_name
-        )
 
         self.n_agents = len(self.nodes)
         self.node_ids = list(self.nodes.keys())
@@ -108,7 +103,7 @@ class QMIXGraph:
     def _init_nodes(self):
         for i, agent_name in enumerate(self.agent_names):
             try:
-                node = AgentRegistry.get(agent_name, domain=self.domain, llm_name=self.llm_name)
+                node = AgentRegistry.get(agent_name, llm_name=self.llm_name)
                 node_id = f"{agent_name}_{i}"
                 self.nodes[node_id] = node
             except Exception as e:
@@ -234,11 +229,8 @@ class QMIXGraph:
             round_idx += 1
 
         # TO DO: CHANGE POST LOOP CODE TO PROCESS COLLECTOR NODE INFO (waiting on collector node code)
-        self._connect_decision_node()
-        await self.decision_node.async_execute(input)
-        final_answers = self.decision_node.outputs
-        if not final_answers:
-            final_answers = ["No answer produced"]
+
+        final_answers = ["No answer produced"]
 
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
         total_tokens = int(tokens_after - tokens_before)
@@ -307,10 +299,6 @@ class QMIXGraph:
         for nid, node in self.nodes.items():
             if node.last_memory["outputs"]:
                 node.add_predecessor(node, "temporal")
-
-    def _connect_decision_node(self):
-        for node in self.nodes.values():
-            node.add_successor(self.decision_node, "spatial")
 
     def _update_memory(self):
         for node in self.nodes.values():

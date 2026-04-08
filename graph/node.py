@@ -20,7 +20,6 @@ class Node(ABC):
     Attributes:
         id: Unique identifier
         agent_name: Name of the agent type
-        domain: Task domain (e.g., humaneval, mmlu, math)
         llm_name: LLM model name to use
         spatial_predecessors/successors: Same-round connections
         temporal_predecessors/successors: Cross-round connections
@@ -33,12 +32,10 @@ class Node(ABC):
         self,
         id: Optional[str] = None,
         agent_name: str = "",
-        domain: str = "",
         llm_name: str = "",
     ):
         self.id: str = id if id is not None else shortuuid.ShortUUID().random(length=4)
         self.agent_name: str = agent_name
-        self.domain: str = domain
         self.llm_name: str = llm_name
         self.spatial_predecessors: List[Node] = []
         self.spatial_successors: List[Node] = []
