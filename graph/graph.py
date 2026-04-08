@@ -14,6 +14,8 @@ Communication patterns are determined by QMIX agent actions:
   - aggregate_refine: receive from all, send refined
   - execute_verify: code execution + tool use
   - debate_check: adversarial edges
+  - append: agent output is added to the report
+  - terminate: end of the process and return the current state of the report
 """
 
 import shortuuid
@@ -96,6 +98,7 @@ class QMIXGraph:
 
         self.n_agents = len(self.nodes)
         self.node_ids = list(self.nodes.keys())
+        self.terminated = False
 
         if fixed_topology and fixed_topology in TOPOLOGY_PRESETS:
             self._fixed_adj = TOPOLOGY_PRESETS[fixed_topology](self.n_agents)
@@ -145,12 +148,14 @@ class QMIXGraph:
         """Convert QMIX agent actions into communication topology.
 
         Each agent's action determines its communication pattern:
-          0 - solo_process:    no edges
-          1 - broadcast_all:   edges to all other agents
-          2 - selective_query: edge to one neighbor (round-robin)
-          3 - aggregate_refine: receive from all (reversed edges)
-          4 - execute_verify:  edge to self (tool use, minimal comm)
-          5 - debate_check:    edge to specific partner for debate
+          0 - solo_process:        no edges
+          1 - broadcast_all:       edges to all other agents
+          2 -> 6 selective_query:  edge to a specific partner
+          7 - aggregate_refine:    receive from all (reversed edges)
+          8 - execute_verify:      edge to self (tool use, minimal comm)
+          9 -> 13 debate_check:    edge to specific partner for debate
+          14 - append:             edge to collector (used to append text to the report)
+          15 - terminate:          end of communication (called when the report is considered complete)
         """
         self._clear_spatial()
         n = self.n_agents
@@ -167,33 +172,37 @@ class QMIXGraph:
                         dst = self.nodes[self.node_ids[j]]
                         if not self._check_cycle(dst, {src}):
                             src.add_successor(dst, "spatial")
-            elif action == 2:  # selective query
-                best_j = (i + 1) % n
+            elif action >= 2 and action <= 6:  # selective query
+                best_j = action - 2
                 dst = self.nodes[self.node_ids[best_j]]
                 if not self._check_cycle(dst, {src}):
                     src.add_successor(dst, "spatial")
-            elif action == 3:  # aggregate (receive from all)
+            elif action == 7:  # aggregate (receive from all)
+                # TO REMOVE: MAY NEED TO REMOVE COLLECTOR FROM SOURCE IF IT CAUSES ISSUES (waiting on colloctor node code)
                 for j in range(n):
                     if j != i:
                         other = self.nodes[self.node_ids[j]]
                         if not self._check_cycle(src, {other}):
                             other.add_successor(src, "spatial")
-            elif action == 4:  # execute_verify (minimal communication)
-                if i + 1 < n:
-                    dst = self.nodes[self.node_ids[i + 1]]
-                    if not self._check_cycle(dst, {src}):
-                        src.add_successor(dst, "spatial")
-            elif action == 5:  # debate
-                partner = (i + n // 2) % n
+            elif action == 8:  # execute_verify (self communication for tool use)
+                src.add_successor(src, "spatial")
+            elif action >= 9 and action <= 13:  # debate
+                partner = action - 9
                 dst = self.nodes[self.node_ids[partner]]
                 if not self._check_cycle(dst, {src}):
                     src.add_successor(dst, "spatial")
                     dst.add_successor(src, "spatial")
+            elif action == 6:  # append
+                collector = self.nodes[self.node_ids[5]]
+                src.add_successor(collector, "spatial")
+            elif action == 7:  # terminate
+                # TO DO, we need to define how the cycle is stopped and the output is returned
+                pass
 
     async def arun(
         self,
         input: Dict[str, str],
-        num_rounds: int = 2,
+        max_rounds: int = 20,
         max_tries: int = 3,
         max_time: int = 300,
         actions: torch.Tensor = None,
@@ -209,7 +218,8 @@ class QMIXGraph:
         """
         tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
 
-        for round_idx in range(num_rounds):
+        round_idx = 0
+        while round_idx < max_rounds and not self.terminated:
             if actions is not None:
                 self.apply_qmix_actions(actions)
             elif self._fixed_adj is not None:
@@ -221,6 +231,9 @@ class QMIXGraph:
             await self._execute_round(input, max_tries, max_time)
             self._update_memory()
 
+            round_idx += 1
+
+        # TO DO: CHANGE POST LOOP CODE TO PROCESS COLLECTOR NODE INFO (waiting on collector node code)
         self._connect_decision_node()
         await self.decision_node.async_execute(input)
         final_answers = self.decision_node.outputs
@@ -234,17 +247,35 @@ class QMIXGraph:
 
     async def _execute_round(self, input, max_tries, max_time):
         """Execute all nodes in topological order."""
-        in_degree = {nid: len(node.spatial_predecessors) for nid, node in self.nodes.items()}
+        in_degree = {}
+        for nid, node in self.nodes.items():
+            count = 0
+            for pred in node.spatial_predecessors:
+            
+                # Ignore self edge and mutual edge (A -> A and A <-> B)
+                if nid in [s.id for s in pred.spatial_successors] and pred.id in [s.id for s in node.spatial_successors]:
+                    if nid <= pred.id: # The node with lower ID has priority
+                        continue 
+                
+                count += 1
+            in_degree[nid] = count
+
         queue = [nid for nid, deg in in_degree.items() if deg == 0]
+        executed_this_round = set()
 
         while queue:
             current_id = queue.pop(0)
+
+            if current_id in executed_this_round:
+                continue
+
             for attempt in range(max_tries):
                 try:
                     await asyncio.wait_for(
                         self.nodes[current_id].async_execute(input),
                         timeout=max_time,
                     )
+                    executed_this_round.add(current_id)
                     break
                 except Exception as e:
                     logger.warning(f"Node {current_id} attempt {attempt + 1} failed: {e}")
@@ -253,7 +284,7 @@ class QMIXGraph:
                 if successor.id not in self.nodes:
                     continue
                 in_degree[successor.id] = in_degree.get(successor.id, 1) - 1
-                if in_degree[successor.id] == 0:
+                if in_degree[successor.id] == 0 and successor.id not in executed_this_round:
                     queue.append(successor.id)
 
     def _clear_spatial(self):

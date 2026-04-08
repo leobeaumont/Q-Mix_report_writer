@@ -22,6 +22,8 @@ QMIX-based multi-agent reinforcement learning that learns optimal communication 
 | 4 | `aggregate_refine` | Receive from all, refine |
 | 5 | `execute_verify` | Tool use, minimal comm |
 | 6 | `debate_check` | Adversarial debate pair |
+| 7 | `append` | Send to a collector node |
+| 8 | `terminate` | Output the content of collector node |
 
 
 ## Quick Start
@@ -49,54 +51,6 @@ bash scripts/run_all_gpt.sh
 bash scripts/run_hle_gpt.sh
 ```
 
-## Datasets
-
-### Training (15 examples each)
-
-| Dataset | HuggingFace Path | Split | Total | Used | Domain |
-|---------|-----------------|-------|-------|------|--------|
-| LiveCodeBench TestGen | `livecodebench/test_generation` | test | 442 | 15 | Coding |
-| MMLU-Pro | `TIGER-Lab/MMLU-Pro` | test | 12k | 15 | Agentic |
-| AIME 2024 | `Maxwell-Jia/AIME_2024` | train | 30 | 15 | Math |
-
-### Testing (8 benchmarks)
-
-| # | Dataset | HuggingFace Path | Split | Samples | Category |
-|---|---------|-----------------|-------|---------|----------|
-| 1 | LiveCodeBench | `livecodebench/code_generation` | test | 400 | Coding |
-| 2 | HumanEval | `openai_humaneval` | test | 164 | Coding |
-| 3 | MMLU-Pro | `TIGER-Lab/MMLU-Pro` | validation | 70 | Reasoning |
-| 4 | AIME 2025 | `MathArena/aime_2025` | train | 30 | Math |
-| 5 | AIME 2026 | `MathArena/aime_2026` | train | 30 | Math |
-| 6 | Beyond-AIME | `ByteDance-Seed/BeyondAIME` | test | 100 | Math |
-| 7 | HMMT Feb 2025 | `MathArena/hmmt_feb_2025` | train | 30 | Math |
-| 8 | HLE (MCQ) | `cais/hle` | test | 250 | Mixed |
-
-### Scripts
-
-| Script | Model | What it does | Results |
-|---|---|---|---|
-| `scripts/run_all_gpt.sh` | GPT-OSS:120B | Train + eval benchmarks 1-7 | `result_gpt/` |
-| `scripts/run_all_gemini.sh` | Gemini Flash Lite | Train + eval benchmarks 1-8 | `result_gemini/` |
-| `scripts/run_hle_gpt.sh` | GPT-OSS:120B | Eval HLE (uses existing checkpoint) | `result_hle_gpt/` |
-| `scripts/run_hle_gemini.sh` | Gemini Flash Lite | Eval HLE (uses existing checkpoint) | `result_hle_gemini/` |
-
-## Agent Baseline
-
-The `agent_baseline/` directory contains the framework comparison baselines used in our evaluation. It benchmarks four industry-standard multi-agent frameworks on the same tasks:
-
-| Framework | Pattern | Source |
-|---|---|---|
-| **AutoGen** | Multi-agent group chat (`RoundRobinGroupChat`) | [microsoft/autogen](https://github.com/microsoft/autogen) |
-| **LangGraph** | Multi-node graph workflow (`StateGraph`) | [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph) |
-| **Agent Framework** | Orchestrated agent pipeline | [microsoft/agent-framework](https://github.com/microsoft/agent-framework) |
-| **Lobster** | Single-agent baseline (direct API call) | [openclaw/lobster](https://github.com/openclaw/lobster) |
-
-We thank the developers of these open-source frameworks for making their tools publicly available.
-
-See [`agent_baseline/README.md`](agent_baseline/README.md) for setup and usage instructions.
-
-
 ## Reproducibility
 
 Pre-trained QMIX checkpoints and evaluation results from our runs are included in the repository.
@@ -108,29 +62,11 @@ Pre-trained QMIX checkpoints and evaluation results from our runs are included i
 | GPT-OSS:120B | `checkpoints/qmix_unified.pt` |
 | Gemini Flash Lite | `checkpoints_gemini/qmix_unified.pt` |
 
-### Agent Q-Mix Results
-
-| Benchmarks | Model | Path |
-|---|---|---|
-| LC, HE, MMLU, AIME, B-AIME, HMMT | GPT-OSS:120B | `result/result_gpt/` |
-| LC, HE, MMLU, AIME, B-AIME, HMMT | Gemini Flash Lite | `result/result_gemini/` |
-| HLE (250 MCQ) | GPT-OSS:120B | `result/result_hle_gpt/` |
-| HLE (250 MCQ) | Gemini Flash Lite | `result/result_hle_gemini/` |
-
-### Framework Baseline Results
-
-| Benchmarks | Model | Path |
-|---|---|---|
-| LC, HE, MMLU, AIME, B-AIME, HMMT | GPT-OSS:120B | `agent_baseline/results/` |
-| LC, HE, MMLU, AIME, B-AIME, HMMT | Gemini Flash Lite | `agent_baseline/results_gemini/` |
-| HLE (250 MCQ) | GPT-OSS:120B | `agent_baseline/results_hle_gpt_oss/` |
-| HLE (250 MCQ) | Gemini Flash Lite | `agent_baseline/results_hle_gemini_pro/` |
-
 ## Project Structure
 
 ```
 agent_q_mix/
-├── qmix/                   # QMIX core (GNN, Q-networks, mixing, replay, trainer)
+├── qmix/                    # QMIX core (GNN, Q-networks, mixing, replay, trainer)
 ├── graph/                   # Multi-agent graph execution engine
 ├── agents/                  # Agent types (MathSolver, CodeWriter, etc.)
 ├── llm/                     # LLM API layer (GPT, DeepSeek, Qwen)
@@ -138,7 +74,37 @@ agent_q_mix/
 ├── datasets/                # Benchmark dataset loaders
 ├── experiments/             # Training and evaluation scripts
 ├── scripts/                 # Shell scripts for training + evaluation
-├── checkpoints/             # Saved QMIX models
-├── result*/                 # Evaluation results (JSON + JSONL)
-└── agent_baseline/          # Framework comparison baselines (AutoGen, LangGraph, etc.)
+└── checkpoints/             # Saved QMIX models
 ```
+
+## Adaptation for report writing
+
+This repository is a specification of [ericjiang18/Agent-Q-Mix](https://github.com/ericjiang18/Agent-Q-Mix) for scientific report writing. This part describes the modifications applied to the code to solve the report writing task.
+
+### New team of agents
+
+The team of agents used for report writing is the following:
+1) Lead architect: responsible for the outline, highest messaging and appending priority.
+2) Researcher: can use RAG tools to look for information in the database.
+3) Data analyst: turns raw data into ideas.
+4) Technical writer: responsible for turning ideas into developped text.
+5) Reviewer: review and grades writings, used to calculate the reward function, lowest messaging and appending priority.
+
+### From `final answer` to `append loop` system
+
+Agent-Q-Mix uses a `final answer` system, where all the agents interact during their communication rounds. After a fixed set of rounds, all of their output is passed to a `decision` agent to generate the final answer given to the user. This approach is good for problem solving and especially token efficiency, but in our case generating a full report in one pass of the `decision` agent would create poor results.
+
+To solve this problem, an `append loop` approach is used without breaking the structure of the original code. To do that, 2 new actions have been added: `append` and `terminate`. When the `append` action is used by an agent, its output is sent to a `collector` agent. The `collector` is only used to store the current state of the report as it is written and does nothing else. When the `terminate` action is selected by the majority of the agents, the round loop ends and the report stored inside of the `collector` agent is returned. This approach keeps the graph design of the original code. This means that the information flows from the user query to the final report with no interruption. 
+
+Technical changes:
+- Creation of `append` and `terminate` actions
+- Created a copy of `selective_query` and `debate_check` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $6 + 2 (N - 1)$ actions where $N$ is the number of agents (an agent can't select itself).
+- Added a lock to prevent multiple agents from using the `append` action on the same turn (lower id agents have both messaging and appending priority).
+- Creation of the `collector` node that receives the output of the agents choosing the `append` action.
+- The `collector` is a normal node like other agents, but it can't use any action.
+- The `collector` node makes sure the text is formatted correctly and no LLM remnants are passed into the report.
+- When an agent choose the `append` action, its prompt informs it that its output will be added to the report.
+- The verification to avoid graph cycles is still present and gives messaging priority to lower indices agents.
+- When an agent action is denied because of an append lock or a cycle, its action is defaulted to `solo_process`.
+- Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge (for `solo_process` and `execute_verify` actions) and mutual edge (for `debate` action).
+
