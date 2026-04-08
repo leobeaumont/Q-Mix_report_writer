@@ -106,5 +106,6 @@ Technical changes:
 - When an agent choose the `append` action, its prompt informs it that its output will be added to the report.
 - The verification to avoid graph cycles is still present and gives messaging priority to lower indices agents.
 - When an agent action is denied because of an append lock or a cycle, its action is defaulted to `solo_process`.
-- Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge (for `solo_process` and `execute_verify` actions) and mutual edge (for `debate` action).
+- Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge (for `execute_verify` action) and mutual edge (for `debate` action).
+- Modified Q-Mix to only train and select actions for the 5 acting agents, while ignoring the `collector` node.
 

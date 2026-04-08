@@ -56,7 +56,8 @@ class QMIXTrainer:
         accuracy_reward_weight: float = 1.0,
         device: str = "cpu",
     ):
-        self.n_agents = n_agents
+        self.n_agents = n_agents  # with collector agent
+        self.n_acting_agents = n_agents - 1  # without collector agent
         self.obs_dim = obs_dim
         self.state_dim = state_dim
         self.n_actions = n_actions
@@ -78,7 +79,7 @@ class QMIXTrainer:
         ).to(device)
 
         self.mixing_network = QMIXMixingNetwork(
-            n_agents=n_agents,
+            n_agents=self.n_acting_agents,  # collector doesn't require Q-value or action selection
             state_dim=state_dim,
             mixing_hidden_dim=mixing_hidden_dim,
         ).to(device)
@@ -126,8 +127,8 @@ class QMIXTrainer:
                 hidden_states.to(self.device),
             )
 
-        actions = torch.zeros(self.n_agents, dtype=torch.long)
-        for i in range(self.n_agents):
+        actions = torch.zeros(self.n_acting_agents, dtype=torch.long)
+        for i in range(self.n_acting_agents):
             if np.random.random() < epsilon:
                 actions[i] = np.random.randint(0, self.n_actions)
             else:
@@ -170,10 +171,11 @@ class QMIXTrainer:
             all_q_values.append(q_stacked)
 
         all_q_values = torch.stack(all_q_values, dim=1)  # (B, T, N, n_actions)
+        acting_q_values = all_q_values[:, :, :self.n_acting_agents, :]  # (B, T, N-1, n_actions) removed collector agent Q-value
 
         # Chosen Q-values: gather by actions taken
-        actions_expanded = batch.actions.unsqueeze(-1)  # (B, T, N, 1)
-        chosen_q = all_q_values.gather(-1, actions_expanded).squeeze(-1)  # (B, T, N)
+        actions_expanded = batch.actions.unsqueeze(-1)  # (B, T, N-1, 1)
+        chosen_q = acting_q_values.gather(-1, actions_expanded).squeeze(-1)  # (B, T, N-1)
 
         # Mix chosen Q-values into Q_tot
         q_tot_list = []
@@ -204,7 +206,8 @@ class QMIXTrainer:
                 target_q_values.append(tq_stacked)
 
             target_q_values = torch.stack(target_q_values, dim=1)  # (B, T, N, n_actions)
-            target_max_q = target_q_values.max(dim=-1)[0]  # (B, T, N)
+            target_acting_q = target_q_values[:, :, :self.n_acting_agents, :]  # (B, T, N-1, n_actions)
+            target_max_q = target_acting_q.max(dim=-1)[0]  # (B, T, N-1)
 
             target_q_tot_list = []
             for t in range(T):
@@ -274,3 +277,76 @@ class QMIXTrainer:
         self.training_step = checkpoint["training_step"]
         self._update_targets()
         logger.info(f"Loaded QMIX checkpoint from {path} (step {self.training_step})")
+
+if __name__ == "__main__":
+    """
+    Small check to ensure all dimensions are synchronized throughout the pipeline.
+    This part of the code is AI generated.
+    """
+
+    # 1. Initialize Trainer (6 nodes total, 5 will act)
+    print("Initializing trainer...")
+    trainer = QMIXTrainer(
+        n_agents=6, 
+        obs_dim=16, 
+        state_dim=32, 
+        n_actions=5, 
+        device="cpu"
+    )
+
+    # 2. Simulate a short episode (3 steps)
+    print("Simulating interaction...")
+    episode = Episode()
+    
+    for t in range(3):
+        # Observations for 6 nodes
+        obs = np.random.randn(6, 16).astype(np.float32)
+        # 6x6 Adjacency matrix
+        adj = np.eye(6).astype(np.float32)
+        # Global state
+        state = np.random.randn(32).astype(np.float32)
+        
+        # Select actions (should return 5 actions)
+        # We need a dummy hidden state for the first step
+        if t == 0:
+            hidden = trainer.agent_network.init_hidden(6)
+            
+        actions, hidden = trainer.select_actions(
+            torch.from_numpy(obs), 
+            torch.from_numpy(adj), 
+            hidden
+        )
+        
+        # Verify action shape
+        assert len(actions) == 5, f"Error: Expected 5 actions, got {len(actions)}"
+        
+        # Create storage step
+        step = EpisodeStep(
+            observations=obs,
+            actions=actions.numpy(), # 5 actions
+            rewards=np.zeros(6),
+            team_reward=1.0,         # Constant reward to check convergence
+            adj_matrix=adj,
+            global_state=state,
+            done=(t == 2)
+        )
+        
+        episode.add_step(step)
+
+    # 3. Add to buffer and train
+    print("Pushing to buffer...")
+    trainer.replay_buffer.push(episode)
+    
+    # We need at least batch_size episodes to train
+    # For testing, we just duplicate this one
+    for _ in range(trainer.batch_size):
+        trainer.replay_buffer.push(episode)
+
+    print("Running training step...")
+    try:
+        stats = trainer.train_step()
+        if stats:
+            print(f"Success! Loss: {stats['loss']:.4f}")
+            print("Pipeline dimensions are correctly synchronized.")
+    except Exception as e:
+        print(f"Pipeline failed! Error: {e}")

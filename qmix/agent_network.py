@@ -19,12 +19,14 @@ from .gnn import GNNMessagePassing
 
 # Agent actions controlling communication and execution strategy
 ACTION_NAMES = [
-    "solo_process",        # 0: Process independently, no communication
-    "broadcast_all",       # 1: Broadcast observation to all neighbors
-    "selective_query",     # 2: Query the most relevant neighbor
-    "aggregate_refine",    # 3: Aggregate neighbor responses and refine own answer
-    "execute_verify",      # 4: Execute code / verify answer with tools
-    "debate_check",        # 5: Adversarial debate with a neighbor
+    "solo_process",                              # 0: Process independently, no communication
+    "broadcast_all",                             # 1: Broadcast observation to all neighbors
+    *[f"selective_query{i}" for i in range(5)],  # 2 -> 6: Query a neighbor
+    "aggregate_refine",                          # 7: Aggregate neighbor responses and refine own answer
+    "execute_verify",                            # 8: Execute code / verify answer with tools
+    *[f"debate_check{i}" for i in range(5)],     # 9 -> 13: Adversarial debate with a neighbor
+    "append",                                    # 14: Send output to the collector node
+    "terminate",                                 # 15: Same as solo process and vote to end report generation.
 ]
 NUM_ACTIONS = len(ACTION_NAMES)
 

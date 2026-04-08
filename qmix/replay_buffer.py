@@ -16,8 +16,8 @@ from collections import deque
 @dataclass
 class EpisodeStep:
     observations: np.ndarray       # (N, obs_dim)
-    actions: np.ndarray            # (N,) action indices
-    rewards: np.ndarray            # (N,) per-agent rewards
+    actions: np.ndarray            # (N-1,) action indices
+    rewards: np.ndarray            # (N-1,) per-agent rewards
     team_reward: float             # R̄ = (1/N) * Σ R_i
     adj_matrix: np.ndarray         # (N, N) communication graph
     global_state: np.ndarray       # (state_dim,)
@@ -29,7 +29,7 @@ class EpisodeStep:
 class EpisodeBatch:
     """A batch of episodes for training."""
     obs: torch.Tensor              # (B, T, N, obs_dim)
-    actions: torch.Tensor          # (B, T, N)
+    actions: torch.Tensor          # (B, T, N-1)
     rewards: torch.Tensor          # (B, T)     team rewards
     adj: torch.Tensor              # (B, T, N, N)
     global_state: torch.Tensor     # (B, T, state_dim)
@@ -95,14 +95,15 @@ class ReplayBuffer:
 
         # Pad episodes to same length
         ep_tensors = [ep.to_tensors() for ep in episodes]
-        N = ep_tensors[0]["obs"].shape[1]
+        N_nodes = ep_tensors[0]["obs"].shape[1]  # 6 agents
+        N_actions = ep_tensors[0]["actions"].shape[1]  # 5 actions
         obs_dim = ep_tensors[0]["obs"].shape[2]
         state_dim = ep_tensors[0]["global_state"].shape[1]
 
-        obs_batch = torch.zeros(B, max_len, N, obs_dim)
-        act_batch = torch.zeros(B, max_len, N, dtype=torch.long)
+        obs_batch = torch.zeros(B, max_len, N_nodes, obs_dim)
+        act_batch = torch.zeros(B, max_len, N_actions, dtype=torch.long)
         rew_batch = torch.zeros(B, max_len)
-        adj_batch = torch.zeros(B, max_len, N, N)
+        adj_batch = torch.zeros(B, max_len, N_nodes, N_nodes)
         state_batch = torch.zeros(B, max_len, state_dim)
         mask_batch = torch.zeros(B, max_len)
         done_batch = torch.zeros(B, max_len)
