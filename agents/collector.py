@@ -1,0 +1,63 @@
+from typing import Dict, Any
+
+from graph.node import Node
+from agents.agent_registry import AgentRegistry
+from utils.config import get_llm
+from utils.globals import ReportState
+from prompt.prompt_set_registry import PromptSetRegistry
+
+
+@AgentRegistry.register("Collector")
+class Collector(Node):
+    """Collector agent meant to collect report text as it is written."""
+
+    def __init__(self, id=None, role=None, llm_name=""):
+        super().__init__(id, "Collector", llm_name)
+        self.llm = get_llm(llm_name)
+        self.prompt_set = PromptSetRegistry.get("collector")
+        self.role = role or "Collector"
+        self.report = ReportState.instance()
+
+    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs): 
+        system_prompt = self.prompt_set.get_role() 
+        system_prompt += self.prompt_set.get_description(self.role) 
+        system_prompt += self.prompt_set.get_constraint(self.role)
+
+        previous_paragraph = self.report.get_last()
+        _, current_text = spatial_info.popitem()
+
+        user_prompt = f"""
+        # INPUT DATA
+        <previous_paragraph>
+        {previous_paragraph}
+        </previous_paragraph>
+
+        <current_text>
+        {current_text}
+        </current_text>
+
+        # INSTRUCTION
+        Based on the rules in the system prompt, output the cleaned and transitioned version of the <current_text> below.
+        """
+
+        return system_prompt, user_prompt
+
+    def _execute(self, input, spatial_info, temporal_info, **kwargs):
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        return self.llm.gen(message)
+
+    async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        return await self.llm.agen(message)
+    
+if __name__ == "__main__":
+    spatial = {"key": "This is the current text"}
+    col = Collector(llm_name="tinyllama")
+
+    system, user = col._process_inputs([], spatial, {})
+
+    print(system)
+    print("=" * 60)
+    print(user)

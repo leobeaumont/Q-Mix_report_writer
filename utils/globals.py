@@ -40,14 +40,22 @@ class Mode(Singleton):
 class ReportState(Singleton):
     def __init__(self):
         self.content = ""
+        self.additions = []
         self.sources = []
     
     def reset(self):
         self.content = ""
+        self.additions = []
         self.sources = []
 
     def append(self, text: str, new_sources: Optional[List] = None):
         self.content += text
+        self.additions.append(text)
 
         if new_sources is not None:
             self.sources += new_sources
+    
+    def get_last(self) -> str:
+        if len(self.additions) > 0:
+            return self.additions[-1]
+        return "[NO PREVIOUS TEXT]"

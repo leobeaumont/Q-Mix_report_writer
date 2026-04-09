@@ -25,7 +25,6 @@ import asyncio
 from typing import Any, List, Optional, Dict, Tuple
 
 from graph.node import Node
-from agents.agent_registry import AgentRegistry
 from prompt.prompt_set_registry import PromptSetRegistry
 from qmix.agent_network import ACTION_NAMES
 from utils.log import get_logger
@@ -101,6 +100,8 @@ class QMIXGraph:
             self._fixed_adj = None
 
     def _init_nodes(self):
+        from agents.agent_registry import AgentRegistry
+        
         for i, agent_name in enumerate(self.agent_names):
             try:
                 node = AgentRegistry.get(agent_name, llm_name=self.llm_name)
