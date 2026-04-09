@@ -28,7 +28,7 @@ from graph.node import Node
 from prompt.prompt_set_registry import PromptSetRegistry
 from qmix.agent_network import ACTION_NAMES
 from utils.log import get_logger
-from utils.globals import PromptTokens, CompletionTokens
+from utils.globals import PromptTokens, CompletionTokens, ReportState
 
 logger = get_logger("graph")
 
@@ -78,7 +78,6 @@ class QMIXGraph:
         self,
         llm_name: str,
         agent_names: List[str],
-        decision_method: str = "FinalRefer",
         fixed_topology: str = None,
     ):
         self.id = shortuuid.ShortUUID().random(length=4)
@@ -91,6 +90,7 @@ class QMIXGraph:
         self._init_nodes()
 
         self.n_agents = len(self.nodes)
+        self.n_acting_agents = self.n_agents - 1  # Collector agent not counted
         self.node_ids = list(self.nodes.keys())
         self.terminated = False
 
@@ -154,7 +154,8 @@ class QMIXGraph:
           15 - terminate:          end of communication (called when the report is considered complete)
         """
         self._clear_spatial()
-        n = self.n_agents
+        n_acting = self.n_acting_agents
+        terminate_votes = 0
 
         for i, action in enumerate(actions):
             action = action.item()
@@ -163,7 +164,7 @@ class QMIXGraph:
             if action == 0:  # solo
                 continue
             elif action == 1:  # broadcast
-                for j in range(n):
+                for j in range(n_acting):
                     if j != i:
                         dst = self.nodes[self.node_ids[j]]
                         if not self._check_cycle(dst, {src}):
@@ -173,9 +174,8 @@ class QMIXGraph:
                 dst = self.nodes[self.node_ids[best_j]]
                 if not self._check_cycle(dst, {src}):
                     src.add_successor(dst, "spatial")
-            elif action == 7:  # aggregate (receive from all)
-                # TO REMOVE: MAY NEED TO REMOVE COLLECTOR FROM SOURCE IF IT CAUSES ISSUES (waiting on colloctor node code)
-                for j in range(n):
+            elif action == 7:  # aggregate (receive from all acting nodes)
+                for j in range(n_acting):
                     if j != i:
                         other = self.nodes[self.node_ids[j]]
                         if not self._check_cycle(src, {other}):
@@ -191,9 +191,10 @@ class QMIXGraph:
             elif action == 14:  # append
                 collector = self.nodes[self.node_ids[5]]
                 src.add_successor(collector, "spatial")
-            elif action == 15:  # terminate
-                # TO DO, we need to define how the cycle is stopped and the output is returned
-                pass
+            elif action == 15:  # terminate (when a majority wants it)
+                terminate_votes += 1
+                if terminate_votes >= n_acting / 2:
+                    self.terminated = True
 
     async def arun(
         self,
@@ -229,14 +230,17 @@ class QMIXGraph:
 
             round_idx += 1
 
-        # TO DO: CHANGE POST LOOP CODE TO PROCESS COLLECTOR NODE INFO (waiting on collector node code)
+        report = ReportState.instance().content
 
-        final_answers = ["No answer produced"]
+        if len(report):
+            final_text = [report]
+        else:
+            final_text = ["No report generated"]
 
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
         total_tokens = int(tokens_after - tokens_before)
 
-        return final_answers, total_tokens
+        return final_text, total_tokens
 
     async def _execute_round(self, input, max_tries, max_time):
         """Execute all nodes in topological order."""

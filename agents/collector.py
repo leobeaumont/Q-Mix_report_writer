@@ -1,5 +1,3 @@
-from typing import Dict, Any
-
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
@@ -24,7 +22,10 @@ class Collector(Node):
         system_prompt += self.prompt_set.get_constraint(self.role)
 
         previous_paragraph = self.report.get_last()
-        _, current_text = spatial_info.popitem()
+        if spatial_info:
+            _, current_text = spatial_info.popitem()
+        else:
+            current_text = "[NO CURRENT TEXT]"
 
         user_prompt = f"""
         # INPUT DATA
@@ -39,18 +40,25 @@ class Collector(Node):
         # INSTRUCTION
         Based on the rules in the system prompt, output the cleaned and transitioned version of the <current_text> below.
         """
-
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
+        if not spatial_info:  # If no agent appended, the collector stays idle
+            return
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        return self.llm.gen(message)
+        response = self.llm.gen(message)
+        self.report.append(response)
+        return response
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
+        if not spatial_info:  # If no agent appended, the collector stays idle
+            return
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        return await self.llm.agen(message)
+        response = await self.llm.agen(message)
+        self.report.append(response)
+        return response
     
 if __name__ == "__main__":
     spatial = {"key": "This is the current text"}
