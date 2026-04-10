@@ -1,6 +1,7 @@
 from .agent_registry import AgentRegistry
-from .math_solver import MathSolver
-from .code_writing import CodeWriting
-from .analyze_agent import AnalyzeAgent
-from .reasoning_agent import ReasoningAgent
-from .final_decision import FinalDirect, FinalRefer, FinalMajorVote
+from .collector import Collector
+from .data_analyst import DataAnalyst
+from .lead_architect import LeadArchitect
+from .researcher import Researcher
+from .reviewer import Reviewer
+from .technical_writer import TechnicalWriter

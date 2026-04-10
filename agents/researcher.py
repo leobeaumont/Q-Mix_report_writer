@@ -1,28 +1,24 @@
-from typing import Dict, Any
-
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
+from utils.globals import ReportState
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
-@AgentRegistry.register("ReasoningAgent")
-class ReasoningAgent(Node):
-    """General-purpose reasoning agent for MMLU, GAIA, Frontier Science, etc."""
+@AgentRegistry.register("Researcher")
+class Researcher(Node):
+    """Main source of information of the team, here to find documents and citations."""
 
-    def __init__(self, id=None, role=None, domain="", llm_name=""):
-        super().__init__(id, "ReasoningAgent", domain, llm_name)
+    def __init__(self, id=None, role=None, llm_name=""):
+        super().__init__(id, "Researcher", llm_name)
         self.llm = get_llm(llm_name)
-        self.prompt_set = PromptSetRegistry.get(domain)
-        self.role = role or "Reasoning Expert"
-        self.constraint = self.prompt_set.get_constraint(self.role)
+        self.prompt_set = PromptSetRegistry.get("redacting")
+        self.role = role or "Researcher"
+        self.report = ReportState.instance()
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
-        system_prompt = (
-            "You are a world-class reasoning expert. Think step by step, "
-            "consider multiple perspectives, and provide a well-reasoned answer. "
-            "Be concise but thorough."
-        )
+        system_prompt = self.prompt_set.get_description(self.role)
+        system_prompt += self.prompt_set.get_constraints(self.role)
 
         spatial_str = ""
         temporal_str = ""
