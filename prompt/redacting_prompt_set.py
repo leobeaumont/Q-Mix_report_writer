@@ -99,6 +99,7 @@ To maximize the joint reward of the agent network by enforcing strict quality co
 
 ROLE_CONSTRAINTS = {
     "Lead Architect": """
+# OPERATIONAL CONSTRAINTS
 * **Logical Path Dependency:** Ensure that the "Current Target" logically follows the previous state.
 * **Team Leader:** Do NOT write the report yourself. You are at the Lead of a full team of Experts, providing them with a strong and intelligent Lead is way better than trying to help them do their job. 
 """,

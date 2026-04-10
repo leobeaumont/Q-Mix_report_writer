@@ -98,8 +98,8 @@ To solve this problem, an `append loop` approach is used without breaking the st
 
 Technical changes:
 - Creation of `append` and `terminate` actions
-- Created a copy of `selective_query` and `debate_check` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $6 + 2 (N - 1)$ actions where $N$ is the number of agents (an agent can't select itself).
-- Added a lock to prevent multiple agents from using the `append` action on the same turn (lower id agents have both messaging and appending priority).
+- Created a copy of `selective_query` and `debate_check` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $6 + 2 N$ actions where $N$ is the number of agents.
+- When multiple agents try using the `append` action on the same turn, only the highest ID agent can append (to give priority to `Reviewer` and `Technical Writer` agents).
 - Creation of the `collector` node that receives the output of the agents choosing the `append` action.
 - The `collector` is a normal node like other agents, but it can't use any action.
 - The `collector` node makes sure the text is formatted correctly and no LLM remnants are passed into the report.

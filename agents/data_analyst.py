@@ -18,7 +18,7 @@ class DataAnalyst(Node):
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
-        system_prompt += self.prompt_set.get_constraints(self.role)
+        system_prompt += self.prompt_set.get_constraint(self.role)
 
         spatial_str = ""
         temporal_str = ""
@@ -29,7 +29,7 @@ class DataAnalyst(Node):
 
         user_prompt = f"Task: {raw_inputs['task']}\n"
         if spatial_str:
-            user_prompt += f"\nOther agents' current responses:\n{spatial_str}"
+            user_prompt += f"\nOther agent's current responses:\n{spatial_str}"
         if temporal_str:
             user_prompt += f"\nPrevious round:\n{temporal_str}"
         user_prompt += "\nThink step by step and provide your answer."
@@ -45,3 +45,15 @@ class DataAnalyst(Node):
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         return await self.llm.agen(message)
+
+if __name__ == "__main__":
+    input_arg = {"task": "write a report"}
+    spatial = {"1": {"role": "Other Agent", "output": "Message from other agent"}}
+    temporal = {"0": {"role": "This agent", "output": "Message from last round"}}
+    col = DataAnalyst(llm_name="tinyllama")
+
+    system, user = col._process_inputs(input_arg, spatial, temporal)
+
+    print(system)
+    print("=" * 60)
+    print(user)
