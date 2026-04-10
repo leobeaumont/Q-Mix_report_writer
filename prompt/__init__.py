@@ -5,3 +5,4 @@ from .agentic_prompt_set import AgenticPromptSet
 from .math_prompt_set import MathPromptSet
 from .hle_prompt_set import HLEPromptSet
 from .collector_prompt import CollectorPromptSet
+from .redacting_prompt_set import RedactingPromptSet
