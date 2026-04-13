@@ -2,15 +2,7 @@
 Query the QMIX multi-agent system with a plain text question.
 
 Usage:
-    python query_qmix.py "What is the derivative of x^2?" --domain math
-    python query_qmix.py "Write a function to reverse a string" --domain coding
-    python query_qmix.py "Explain the causes of WWI" --domain reasoning
-    python query_qmix.py "What is the capital of France?" --domain reasoning --model_path checkpoints_ollama/qmix_unified.pt
-
-Domains:
-    reasoning  ->  General knowledge, analysis, open questions  (uses mmlu_pro prompt set)
-    math       ->  Mathematical problems, calculations          (uses aime prompt set)
-    coding     ->  Programming tasks, algorithms                (uses humaneval prompt set)
+    python query_qmix.py "Write a report on MMDP models."
 """
 
 import os
@@ -26,24 +18,6 @@ sys.path.insert(0, ROOT_DIR)
 from graph.graph import QMIXGraph
 from qmix.qmix_trainer import QMIXTrainer
 from utils.config import get_config
-
-# ── Domain mapping ────────────────────────────────────────────────────────────
-# Maps user-friendly names to the keys registered in PromptSetRegistry
-# and the agent configuration keys in default.yaml
-DOMAIN_MAP = {
-    "reasoning": {
-        "prompt_key": "mmlu_pro",   # AgenticPromptSet — most general purpose
-        "config_key": "reasoning",
-    },
-    "math": {
-        "prompt_key": "aime",       # MathPromptSet
-        "config_key": "math",
-    },
-    "coding": {
-        "prompt_key": "humaneval",  # CodingPromptSet
-        "config_key": "coding",
-    },
-}
 
 # ── Dimension helpers ─────────────────────────────────────────────────────────
 # Derived directly from QMIXGraph.get_observation_features() in graph/graph.py:
@@ -71,13 +45,6 @@ async def main():
         help="The question or task for the agents to solve.",
     )
     parser.add_argument(
-        "--domain",
-        type=str,
-        default="reasoning",
-        choices=list(DOMAIN_MAP.keys()),
-        help="The type of task. Controls which agents and prompts are used. (default: reasoning)",
-    )
-    parser.add_argument(
         "--model_path",
         type=str,
         default=None,
@@ -86,22 +53,21 @@ async def main():
     parser.add_argument(
         "--rounds",
         type=int,
-        default=2,
-        help="Number of communication rounds between agents. (default: 2)",
+        default=20,
+        help="Maximum number of communication rounds between agents. (default: 20)",
     )
     args = parser.parse_args()
 
     # ── Config ────────────────────────────────────────────────────────────────
     config = get_config()
     llm_name = config.get("llm", {}).get("default_model", "tinyllama")
-    domain_info = DOMAIN_MAP[args.domain]
-    prompt_key = domain_info["prompt_key"]
-    config_key = domain_info["config_key"]
+    prompt_key = "redacting"
+    config_key = "redacting"
 
     agent_names = (
         config.get("agent_configs", {})
               .get(config_key, {})
-              .get("agents", ["ReasoningAgent", "ReasoningAgent", "AnalyzeAgent"])
+              .get("agents", ["LeadArchitect", "Researcher", "DataAnalyst", "TechnicalWriter", "Reviewer", "Collector"])
     )
     n_agents = len(agent_names)
 
@@ -109,10 +75,10 @@ async def main():
     print("=" * 56)
     print("  QMIX Multi-Agent System")
     print("=" * 56)
-    print(f"  Model    : {llm_name}")
-    print(f"  Domain   : {args.domain} -> prompt set: {prompt_key}")
-    print(f"  Agents   : {agent_names}")
-    print(f"  Rounds   : {args.rounds}")
+    print(f"  Model      : {llm_name}")
+    print(f"  Prompt set : {prompt_key}")
+    print(f"  Agents     : {agent_names}")
+    print(f"  Rounds     : {args.rounds}")
     print("=" * 56)
     print()
 
@@ -139,7 +105,6 @@ async def main():
     # ── Graph (the 'body' that runs the agents) ───────────────────────────────
     # prompt_key must match a key registered in PromptSetRegistry
     graph = QMIXGraph(
-        domain=prompt_key,
         llm_name=llm_name,
         agent_names=agent_names,
     )
@@ -154,7 +119,16 @@ async def main():
     with torch.no_grad():
         actions, _ = trainer.select_actions(obs, adj, hidden, epsilon=0.0)
 
-    action_names = ["solo", "broadcast", "selective", "aggregate", "execute_verify", "debate"]
+    action_names = [
+        "solo", 
+        "broadcast", 
+        *[f"selective{i}" for i in range(n_agents - 1)], 
+        "aggregate", 
+        "execute_verify", 
+        *[f"debate{i}" for i in range(n_agents - 1)],
+        "append",
+        "terminate"
+    ]
     action_labels = [action_names[a] for a in actions.tolist()]
     print(f"[*] Agent communication actions: {action_labels}")
     print()
@@ -164,7 +138,7 @@ async def main():
     # ── Execute ───────────────────────────────────────────────────────────────
     answers, tokens = await graph.arun(
         {"task": args.query},
-        num_rounds=args.rounds,
+        max_rounds=args.rounds,
         actions=actions,
     )
 

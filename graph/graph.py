@@ -84,8 +84,6 @@ class QMIXGraph:
         self.llm_name = llm_name
         self.agent_names = agent_names
         self.nodes: Dict[str, Node] = {}
-        #self.prompt_set = PromptSetRegistry.get()
-        # NEED TO REDEFINE HOW TO ACCESS NEW PROMPTS waiting on prompt writing
 
         self._init_nodes()
 
@@ -104,8 +102,8 @@ class QMIXGraph:
         
         for i, agent_name in enumerate(self.agent_names):
             try:
-                node = AgentRegistry.get(agent_name, llm_name=self.llm_name)
                 node_id = f"{agent_name}_{i}"
+                node = AgentRegistry.get(agent_name, id=node_id, llm_name=self.llm_name)
                 self.nodes[node_id] = node
             except Exception as e:
                 logger.warning(f"Failed to create agent {agent_name}: {e}")
@@ -184,10 +182,11 @@ class QMIXGraph:
                 src.add_successor(src, "spatial")
             elif action >= 9 and action <= 13:  # debate
                 partner = action - 9
-                dst = self.nodes[self.node_ids[partner]]
-                if not self._check_cycle(dst, {src}):
-                    src.add_successor(dst, "spatial")
-                    dst.add_successor(src, "spatial")
+                if partner != i:
+                    dst = self.nodes[self.node_ids[partner]]
+                    if not self._check_cycle(dst, {src}):
+                        src.add_successor(dst, "spatial")
+                        dst.add_successor(src, "spatial")
             elif action == 14:  # append
                 collector = self.nodes[self.node_ids[5]]
                 src.add_successor(collector, "spatial")
@@ -278,9 +277,9 @@ class QMIXGraph:
                     logger.warning(f"Node {current_id} attempt {attempt + 1} failed: {e}")
 
             for successor in self.nodes[current_id].spatial_successors:
-                if successor.id not in self.nodes:
+                if successor.id not in self.nodes.keys():
                     continue
-                in_degree[successor.id] = in_degree.get(successor.id, 1) - 1
+                in_degree[successor.id] = max(in_degree.get(successor.id, 1) - 1, 0)
                 if in_degree[successor.id] == 0 and successor.id not in executed_this_round:
                     queue.append(successor.id)
 
@@ -288,8 +287,6 @@ class QMIXGraph:
         for node in self.nodes.values():
             node.spatial_predecessors = []
             node.spatial_successors = []
-        self.decision_node.spatial_predecessors = []
-        self.decision_node.spatial_successors = []
 
     def _clear_temporal(self):
         for node in self.nodes.values():
