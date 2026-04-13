@@ -42,15 +42,18 @@ class ReportState(Singleton):
         self.content = ""
         self.additions = []
         self.sources = []
+        self.progress = "[NOTHING WRITTEN SO FAR]"
     
     def reset(self):
         self.content = ""
         self.additions = []
         self.sources = []
+        self.progress = "[NOTHING WRITTEN SO FAR]"
 
-    def append(self, text: str, new_sources: Optional[List] = None):
+    def append(self, text: str, progress: str, new_sources: Optional[List] = None):
         self.content += text
         self.additions.append(text)
+        self.progress = progress
 
         if new_sources is not None:
             self.sources += new_sources

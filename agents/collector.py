@@ -28,18 +28,18 @@ class Collector(Node):
             current_text = "[NO CURRENT TEXT]"
 
         user_prompt = f"""
-        # INPUT DATA
-        <previous_paragraph>
-        {previous_paragraph}
-        </previous_paragraph>
+# INPUT DATA
+<previous_paragraph>
+{previous_paragraph}
+</previous_paragraph>
 
-        <current_text>
-        {current_text}
-        </current_text>
+<current_text>
+{current_text}
+</current_text>
 
-        # INSTRUCTION
-        Based on the rules in the system prompt, output the cleaned and transitioned version of the <current_text> below.
-        """
+# INSTRUCTION
+Based on the rules in the system prompt, output the cleaned and transitioned version of the <current_text> below.
+"""
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
@@ -47,18 +47,47 @@ class Collector(Node):
             return
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message)
-        self.report.append(response)
-        return response
+        response1 = self.llm.agen(message)
+
+        previous_progress = self.report.progress
+        system_prompt, user_prompt = self._progress_prompt(previous_progress, response1)
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        response2 = self.llm.agen(message)
+
+        self.report.append(response1, response2)
+        return response1
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = await self.llm.agen(message)
-        self.report.append(response)
-        return response
+        response1 = await self.llm.agen(message)
+
+        previous_progress = self.report.progress
+        system_prompt, user_prompt = self._progress_prompt(previous_progress, response1)
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        response2 = await self.llm.agen(message)
+
+        self.report.append(response1, response2)
+        return response1
+    
+    def _progress_prompt(self, previous_progress: str, addition: str) -> str:
+        task = self.prompt_set.get_summarize()
+
+        context = f"""
+# INPUT DATA
+<report state>
+{previous_progress}
+</report state>
+
+<addition>
+{addition}
+</addition>
+
+[WRITE NEW SUMMARY HERE]
+"""
+        return task, context
     
 if __name__ == "__main__":
     spatial = {"key": "This is the current text"}
@@ -69,3 +98,13 @@ if __name__ == "__main__":
     print(system)
     print("=" * 60)
     print(user)
+
+    old = "Old report state."
+    new = "New addition."
+
+    system, user = col._progress_prompt(old, new)
+    print("\n\n")
+    print(system)
+    print("=" * 60)
+    print(user)
+
