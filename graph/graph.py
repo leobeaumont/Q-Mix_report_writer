@@ -198,7 +198,7 @@ class QMIXGraph:
     async def arun(
         self,
         input: Dict[str, str],
-        max_rounds: int = 20,
+        num_rounds: int = 1,
         max_tries: int = 3,
         max_time: int = 300,
         actions: torch.Tensor = None,
@@ -215,7 +215,7 @@ class QMIXGraph:
         tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
 
         round_idx = 0
-        while round_idx < max_rounds and not self.terminated:
+        while round_idx < num_rounds and not self.terminated:
             if actions is not None:
                 self.apply_qmix_actions(actions)
             elif self._fixed_adj is not None:
@@ -322,11 +322,12 @@ class QMIXGraph:
     def get_observation_features(self, task: str) -> np.ndarray:
         """Create observation features for QMIX from current state.
 
-        Features per agent: [task_hash_features, agent_role_id, round_info,
-                             num_neighbors, has_output, token_usage_ratio]
+        Features per agent: [task_hash_features, progress_hash_features, agent_role_id,
+                             round_info, num_neighbors, has_output, token_usage_ratio]
         """
         obs_list = []
         task_features = self._task_to_features(task)
+        state_features = self._state_to_features(ReportState.instance().progress)
 
         for i, nid in enumerate(self.node_ids):
             node = self.nodes[nid]
@@ -338,6 +339,7 @@ class QMIXGraph:
 
             node_obs = np.concatenate([
                 task_features,
+                state_features,
                 agent_feature,
                 [has_output, n_neighbors / max(self.n_agents, 1), node.token_usage / 10000.0],
             ])
@@ -345,11 +347,21 @@ class QMIXGraph:
 
         return np.stack(obs_list)
 
-    def _task_to_features(self, task: str, dim: int = 32) -> np.ndarray:
+    def _task_to_features(self, task: str, dim: int = 16) -> np.ndarray:
         """Simple hash-based task feature extraction."""
         features = np.zeros(dim)
         for i, c in enumerate(task.encode()[:dim * 4]):
             features[i % dim] += c / 255.0
+        norm = np.linalg.norm(features)
+        if norm > 0:
+            features /= norm
+        return features
+    
+    def _state_to_features(self, state_summary: str, dim: int = 16) -> np.ndarray:
+        """ Simple hash-based state feature extraction."""
+        features = np.zeros(dim)
+        for i, c in enumerate(state_summary.encode()[:dim * 4]):
+            features[i % dim] += c / 255.0 
         norm = np.linalg.norm(features)
         if norm > 0:
             features /= norm

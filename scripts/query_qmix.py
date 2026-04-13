@@ -109,38 +109,51 @@ async def main():
         agent_names=agent_names,
     )
 
-    # ── Action selection ──────────────────────────────────────────────────────
-    obs = torch.tensor(
-        graph.get_observation_features(args.query), dtype=torch.float32
-    )
+    # ── Main loop ─────────────────────────────────────────────────────────────
+    obs = torch.tensor(graph.get_observation_features(args.query), dtype=torch.float32)
     adj = torch.tensor(graph.get_adj_matrix(), dtype=torch.float32)
     hidden = trainer.agent_network.init_hidden(n_agents)
 
-    with torch.no_grad():
-        actions, _ = trainer.select_actions(obs, adj, hidden, epsilon=0.0)
-
-    action_names = [
-        "solo", 
-        "broadcast", 
-        *[f"selective{i}" for i in range(n_agents - 1)], 
-        "aggregate", 
-        "execute_verify", 
-        *[f"debate{i}" for i in range(n_agents - 1)],
-        "append",
-        "terminate"
-    ]
-    action_labels = [action_names[a] for a in actions.tolist()]
-    print(f"[*] Agent communication actions: {action_labels}")
-    print()
     print(f"[*] Running {n_agents} agents over {args.rounds} round(s)...")
     print()
 
-    # ── Execute ───────────────────────────────────────────────────────────────
-    answers, tokens = await graph.arun(
-        {"task": args.query},
-        max_rounds=args.rounds,
-        actions=actions,
-    )
+    round = 0
+    while round < args.rounds and not graph.terminated:
+
+        print(f"[*] Round {round + 1}/{args.rounds}")
+
+        # ── Action selection ──────────────────────────────────────────────────
+
+        with torch.no_grad():
+            actions, hidden = trainer.select_actions(obs, adj, hidden, epsilon=0.0)
+
+        action_names = [
+            "solo", 
+            "broadcast", 
+            *[f"selective{i}" for i in range(n_agents - 1)], 
+            "aggregate", 
+            "execute_verify", 
+            *[f"debate{i}" for i in range(n_agents - 1)],
+            "append",
+            "terminate"
+        ]
+        action_labels = [action_names[a] for a in actions.tolist()]
+        print(f"[*] Agent communication actions: {action_labels}")
+        print()
+
+        # ── Execute ───────────────────────────────────────────────────────────
+        answers, tokens = await graph.arun(
+            {"task": args.query},
+            actions=actions,
+        )
+
+        new_obs = torch.tensor(graph.get_observation_features(args.query), dtype=torch.float32)
+        new_adj = torch.tensor(graph.get_adj_matrix(), dtype=torch.float32)
+
+        obs = new_obs
+        adj = new_adj
+
+        round += 1
 
     # ── Output ────────────────────────────────────────────────────────────────
     print("=" * 56)
