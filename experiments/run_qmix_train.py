@@ -7,7 +7,7 @@ This script implements the centralized training phase:
    a. Sample a task from the dataset
    b. Agents select actions via epsilon-greedy using their Q-networks
    c. Execute the multi-agent graph with QMIX-selected topology
-   d. Compute reward: accuracy * w_acc - token_usage * w_token
+   d. Compute reward: delta_report_quality * report_quality_weight + delta_token_goal * token_goal 
    e. Store episode in replay buffer
    f. Train QMIX by minimizing TD loss
 3. Save trained model for decentralized deployment
@@ -29,46 +29,17 @@ from qmix.agent_network import NUM_ACTIONS
 from graph.graph import QMIXGraph
 from datasets import get_dataset
 from utils.log import get_logger
-from utils.globals import PromptTokens, CompletionTokens, Cost
+from utils.globals import PromptTokens, CompletionTokens, ReportState, Score, TokenGoal
+from utils.config import get_config
 
 logger = get_logger("qmix_train")
 
-DOMAIN_MAP = {
-    "humaneval": "humaneval",
-    "livecodebench": "livecodebench",
-    "livecodebench_testgen": "livecodebench",
-    "mmlu_pro": "mmlu_pro",
-    "gaia": "gaia",
-    "frontierscience": "gaia",
-    "aime_2024": "aime",
-    "aime_2025": "aime",
-    "aime_2026": "aime",
-    "beyond_aime": "aime",
-    "hmmt_2025": "hmmt",
-    "hle": "hle",
-}
 
-AGENT_CONFIGS = {
-    "humaneval": ["CodeWriter", "CodeWriter", "AnalyzeAgent"],
-    "livecodebench": ["CodeWriter", "CodeWriter", "AnalyzeAgent"],
-    "livecodebench_testgen": ["CodeWriter", "CodeWriter", "AnalyzeAgent"],
-    "mmlu_pro": ["ReasoningAgent", "ReasoningAgent", "AnalyzeAgent"],
-    "gaia": ["ReasoningAgent", "ReasoningAgent", "AnalyzeAgent"],
-    "frontierscience": ["ReasoningAgent", "ReasoningAgent", "AnalyzeAgent"],
-    "aime_2024": ["MathSolver", "MathSolver", "AnalyzeAgent"],
-    "aime_2025": ["MathSolver", "MathSolver", "AnalyzeAgent"],
-    "aime_2026": ["MathSolver", "MathSolver", "AnalyzeAgent"],
-    "beyond_aime": ["MathSolver", "MathSolver", "AnalyzeAgent"],
-    "hmmt_2025": ["MathSolver", "MathSolver", "AnalyzeAgent"],
-    "hle": ["ReasoningAgent", "ReasoningAgent", "AnalyzeAgent"],
-}
-
-
-def get_obs_dim(n_agents, task_feature_dim=32):
+def get_obs_dim(n_agents, task_feature_dim=16, state_feature_dim=16):
     """Calculate observation dimension per agent."""
     agent_id_dim = 16
     extra_features = 3  # has_output, n_neighbors_ratio, token_ratio
-    return task_feature_dim + agent_id_dim + extra_features
+    return task_feature_dim + state_feature_dim + agent_id_dim + extra_features  # 51
 
 
 def get_state_dim(n_agents, obs_dim):
@@ -82,17 +53,20 @@ async def run_episode(
     trainer: QMIXTrainer,
     task_text: str,
     epsilon: float,
-    num_rounds: int = 2,
+    max_rounds: int = 20,
 ) -> Episode:
     """Run a single episode of QMIX-driven multi-agent interaction."""
     episode = Episode()
+    ReportState.instance().reset()
     n_agents = graph.n_agents
 
     hidden = trainer.agent_network.init_hidden(n_agents)
     obs = torch.tensor(graph.get_observation_features(task_text), dtype=torch.float32)
     adj = torch.tensor(graph.get_adj_matrix(), dtype=torch.float32)
 
-    for step in range(num_rounds):
+    step = 0
+    step_buffer = []
+    while step < max_rounds and not graph.terminated:
         actions, hidden = trainer.select_actions(obs, adj, hidden, epsilon)
 
         tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
@@ -114,62 +88,54 @@ async def run_episode(
             team_reward=0.0,  # placeholder, set after evaluation
             adj_matrix=adj.numpy(),
             global_state=global_state,
-            done=(step == num_rounds - 1),
+            done=(step == max_rounds - 1 or graph.terminated),
             token_usage=tokens_used,
         )
-        episode.add_step(step_data)
+        step_buffer.append(step_data)
+
+        if np.any(actions == 14):  # If any agent appended this step
+            # We propagate the new reward to all previous step until previous append action
+            delta_report_score = Score.instance().get_delta()
+            delta_token_goal = TokenGoal.instance().get_delta()
+            reward = trainer.compute_reward(delta_report_score, delta_token_goal)
+            for previous_step in step_buffer:
+                previous_step.team_reward = reward
+                episode.add_step(previous_step)
+            step_buffer = []
 
         obs = new_obs
         adj = new_adj
+
+        step += 1
+    
+    for previous_step in step_buffer:  # All unused steps in buffer are pushed with reward = 0
+        episode.add_step(previous_step)
 
     return episode, answers
 
 
 async def train(args):
-    """Main training loop. Supports single-dataset or multi-dataset interleaved training."""
-    dataset_names = [d.strip() for d in args.dataset.split(",")]
-    is_multi = len(dataset_names) > 1
+    """Main training loop."""
 
-    all_datasets = []
-    all_domains = []
-    all_agent_names = []
-    n_agents = None
-
-    for ds_name in dataset_names:
-        domain = DOMAIN_MAP.get(ds_name, ds_name)
-        agents = AGENT_CONFIGS.get(ds_name, ["ReasoningAgent"] * 3)
-        if n_agents is None:
-            n_agents = len(agents)
-        ds = get_dataset(ds_name, split=args.split, limit=args.data_limit, data_path=args.data_path)
-        if len(ds) == 0:
-            logger.error(f"No samples loaded for {ds_name}. Check that HuggingFace 'datasets' library "
-                          f"is installed (`pip install datasets`) and can access the internet, or provide "
-                          f"--data_path to a local JSONL file.")
-            continue
-        all_datasets.append(ds)
-        all_domains.append(domain)
-        all_agent_names.append(agents)
-        logger.info(f"Dataset loaded: {ds_name} ({len(ds)} samples, domain={domain})")
-
-    if not all_datasets:
-        logger.error("No datasets loaded. Aborting.")
-        return
-
-    label = ",".join(dataset_names)
+    agent_names = get_config().get("agent_config", {}
+                             ).get("redacting", {}
+                             ).get("agents", ["LeadArchitect", 
+                                              "Researcher", 
+                                              "DataAnalyst", 
+                                              "TechnicalWriter", 
+                                              "Reviewer", 
+                                              "Collector"])
+    n_agents = len(agent_names)
 
     print()
     print("=" * 60)
-    if is_multi:
-        print(f"  QMIX UNIFIED TRAINING: {label.upper()}")
-    else:
-        print(f"  QMIX TRAINING: {label.upper()}")
+    print(f"  QMIX TRAINING: Redacting team")
     print("=" * 60)
-    print(f"  LLM:       {args.llm_name}")
-    print(f"  Datasets:  {dataset_names}")
-    print(f"  Agents:    {[a for a in all_agent_names]}")
-    print(f"  Episodes:  {args.num_episodes}")
-    print(f"  Rounds:    {args.num_rounds}")
-    print(f"  Device:    {args.device}")
+    print(f"  LLM:        {args.llm_name}")
+    print(f"  Agents:     {[a for a in agent_names]}")
+    print(f"  Episodes:   {args.num_episodes}")
+    print(f"  Max rounds: {args.max_rounds}")
+    print(f"  Device:     {args.device}")
     print("=" * 60)
     print()
 
@@ -186,8 +152,8 @@ async def train(args):
         target_update_interval=args.target_update,
         buffer_capacity=args.buffer_size,
         batch_size=args.batch_size,
-        token_penalty_weight=args.token_penalty,
-        accuracy_reward_weight=args.accuracy_weight,
+        token_weight=args.token_weight,
+        report_quality_weight=args.report_quality_weight,
         device=args.device,
     )
 
@@ -202,33 +168,23 @@ async def train(args):
     import time as _time
     _train_start = _time.time()
 
-    n_ds = len(all_datasets)
-
     for ep_idx in range(args.num_episodes):
         _ep_start = _time.time()
 
-        ds_idx = ep_idx % n_ds
-        dataset = all_datasets[ds_idx]
-        domain = all_domains[ds_idx]
-        agent_names = all_agent_names[ds_idx]
-        sample = dataset[(ep_idx // n_ds) % len(dataset)]
-
         graph = QMIXGraph(
-            domain=domain,
             llm_name=args.llm_name,
             agent_names=agent_names,
-            decision_method=args.decision_method,
         )
 
         episode, answers = await run_episode(
-            graph, trainer, sample.task, epsilon, num_rounds=args.num_rounds,
+            graph, trainer, task, epsilon, max_rounds=args.max_rounds,
         )
 
-        answer_text = answers[0] if answers else ""
-        accuracy = dataset.evaluate(answer_text, sample.ground_truth)
+        answer_text = ReportState.instance().content
+
         total_tokens = episode.total_tokens
 
-        reward = trainer.compute_reward(accuracy, total_tokens, max_tokens=args.max_tokens)
+        reward = trainer.compute_reward(score, tokens)
 
         for step in episode.steps:
             step.team_reward = reward
@@ -244,16 +200,15 @@ async def train(args):
         _avg_ep_time = _total_elapsed / (ep_idx + 1)
         _remaining = _avg_ep_time * (args.num_episodes - ep_idx - 1)
 
-        ds_label = dataset_names[ds_idx]
-        task_preview = sample.task[:80].replace("\n", " ")
-        answer_preview = answer_text[:120].replace("\n", " ")
+        task_preview = task[:80].replace("\n", " ")
+        answer_preview = ReportState.instance().progress[:120].replace("\n", " ")
         loss_str = f"loss={train_info['loss']:.4f}" if train_info else "loss=n/a"
 
         print(f"\n--- Episode {ep_idx+1}/{args.num_episodes} "
-              f"[{ds_label}, {_ep_elapsed:.1f}s] ---")
+              f"[{_ep_elapsed:.1f}s] ---")
         print(f"  Task:   {task_preview}...")
         print(f"  Output: {answer_preview}...")
-        print(f"  acc={accuracy:.2f} | reward={reward:.3f} | "
+        print(f"  score={score:.2f} | reward={reward:.3f} | "
               f"tokens={total_tokens} | eps={epsilon:.3f} | {loss_str}")
         print(f"  Elapsed: {_total_elapsed:.0f}s | "
               f"ETA: {_remaining:.0f}s ({_remaining/60:.1f}min)")
@@ -270,7 +225,7 @@ async def train(args):
     avg_t = trainer.replay_buffer.avg_tokens
     print()
     print("=" * 60)
-    print(f"  TRAINING COMPLETE: {label.upper()}")
+    print(f"  TRAINING COMPLETE: Redacting team")
     print("=" * 60)
     print(f"  Best Reward:  {best_reward:.4f}")
     print(f"  Avg Reward:   {avg_r:.4f}")
@@ -284,14 +239,10 @@ async def train(args):
 
 def main():
     parser = argparse.ArgumentParser(description="QMIX Training for Multi-Agent Topology Optimization")
-    parser.add_argument("--dataset", type=str, required=True,
-                        help="Single dataset name or comma-separated list for unified training "
-                             "(e.g. 'livecodebench_testgen,mmlu_pro,aime_2024')")
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini")
-    parser.add_argument("--decision_method", type=str, default="FinalRefer")
     parser.add_argument("--num_episodes", type=int, default=500)
-    parser.add_argument("--num_rounds", type=int, default=2)
+    parser.add_argument("--max_rounds", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--buffer_size", type=int, default=5000)
     parser.add_argument("--lr", type=float, default=5e-4)
@@ -299,8 +250,8 @@ def main():
     parser.add_argument("--epsilon_start", type=float, default=1.0)
     parser.add_argument("--epsilon_end", type=float, default=0.05)
     parser.add_argument("--target_update", type=int, default=200)
-    parser.add_argument("--token_penalty", type=float, default=0.1)
-    parser.add_argument("--accuracy_weight", type=float, default=1.0)
+    parser.add_argument("--token_weight", type=float, default=0.1)
+    parser.add_argument("--report_quality_weight", type=float, default=1.0)
     parser.add_argument("--max_tokens", type=int, default=10000)
     parser.add_argument("--data_limit", type=int, default=None)
     parser.add_argument("--data_path", type=str, default=None)

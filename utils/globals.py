@@ -62,3 +62,41 @@ class ReportState(Singleton):
         if len(self.additions) > 0:
             return self.additions[-1]
         return "[NO PREVIOUS TEXT]"
+    
+class Score(Singleton):
+    def __init__(self):
+        self.previous_score: Optional[float] = None
+        self.current_score: Optional[float] = None
+
+    def reset(self):
+        self.previous_score = None
+        self.current_score = None
+
+    def get_delta(self):
+        if self.previous_score is None:
+            return self.current_score
+        else:
+            return self.current_score - self.previous_score
+        
+    def update(self, new_score):
+        self.previous_score = self.current_score
+        self.current_score = new_score
+
+class TokenGoal(Singleton):
+    def __init__(self):
+        self.previous_score: Optional[float] = None
+        self.current_score: Optional[float] = None
+
+    def reset(self):
+        self.previous_score = None
+        self.current_score = None
+
+    def get_delta(self):
+        if self.previous_score is None:
+            return self.current_score
+        else:
+            return self.current_score - self.previous_score
+        
+    def update(self, new_score):
+        self.previous_score = self.current_score
+        self.current_score = new_score

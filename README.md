@@ -123,3 +123,6 @@ Technical changes:
 - Added a `Micro Scoring` and `Macro Scoring` LLM judges used during training to help improve the quality of the production. The `Micro Scoring` judge scores each chunk of the document. The `Macro Scoring` judge scores the whole document. 
 - `Micro Scoring` judge is responsible for: logic, verifiability, technical precision, information density and hallucination flagging.
 - `Macro Scoring` judge is responsible for: subject coverage, flow, structure, tone and avoiding repetition.
+- The reward is now computed after every `append` action, because the changes in the report cause changes in the report `score` and `token goal` completion.
+- All rounds between the previous `append` round and the current `append` round receive the same reward as the current `append` round. This is done to reward all the rounds that lead to a good `append` to the the report and not only the round where the `append` action occurs.
+- Added a `Score` and `TokenGoal` sigletons to track their current respective value, but also the previous one. This way a `get_delta()` method can be called on them to get the difference between their current and their last value.
