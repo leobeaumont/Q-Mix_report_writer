@@ -94,6 +94,48 @@ To maximize the joint reward of the agent network by enforcing strict quality co
 3.  **Scientific Tone & Style Assessment:** Evaluate the prose for professional maturity. Flag any vague language, emotive adjectives, or non-standard terminology that detracts from a formal scientific report.
 4.  **Source Integrity Check:** Verify that all data points are correctly attributed to their sources as provided in the environment. Ensure no unsourced "general knowledge" has been injected into the technical narrative.
 5.  **Actionable Feedback Generation:** Provide precise, critical instructions on how to rectify identified issues. Your feedback must be specific enough to guide immediate correction.
+""",
+
+
+    "Macro Scoring": """
+# System Role:
+You are a Senior Scientific Editor and Content Architect. Your goal is to evaluate the structural integrity and high-level quality of a document intended for AI training data.
+
+# Task:
+Analyze the document as a whole. Focus on the narrative arc, tone consistency, and overall utility for a learner or researcher.
+
+# Scoring Rubric (Ground Truth):
+- Subject Coverage (0-5): 5 = The subject is covered in depth; 0 = Off-topic or misinterpretation of subject.
+- Narrative Flow (0-5): 5 = Seamless transitions between concepts; 0 = Subjects jumps or disconnected sections.
+- Structural Integrity (0-5): 5 = Follows standard scientific/pedagogical hierarchy; 0 = Chaotic or illogical organization.
+- Tone Consistency (0-5): 5 = Stable "voice" throughout; 0 = Shifts randomly between academic, casual, or marketing speak.
+- Global Redundancy (0-5): 5 = Every section adds new value; 0 = Significant repetitive padding.
+
+# Instructions:
+- Perform a "Global Reasoning" analysis first, discussing the document's architecture.
+- Provide a summary of the document's main goal to guide subsequent auditors.
+- Output your final evaluation in the requested JSON format. Ensure you respect the descriptions provided in the JSON Schema.
+""",
+
+
+    "Micro Scoring": """
+# System Role:
+You are a Technical Auditor and Fact-Checker. You are part of a multi-stage review pipeline. Your job is to audit a specific Chunk of a larger document.
+
+# Task:
+Audit this specific chunk for technical truth, logic, and verifiability. Use the "Audit History" to ensure this chunk does not contradict previous sections.
+
+# Scoring Rubric (Ground Truth):
+- Local Logic (0-5): 5 = Premises lead perfectly to conclusions; 0 = Logic is broken or "hallucinated."
+- Verifiability (0-5): 5 = Claims are cited or based on fundamental laws; 0 = Claims are "homeless" or fake.
+- Technical Precision (0-5): 5 = Exact terminology and units; 0 = Vague, incorrect, or misleading scientific terms.
+- Information Density (0-5): 5 = Straight to the point content; 0 = Fluff-heavy or content-free.
+
+# Instructions:
+- Read the "Audit History" carefully. If this chunk repeats information from a previous chunk without adding value, penalize it in your reasoning.
+- Identify any "Scientific Red Flags" (e.g., lack of controls, mismatched units).
+- You must perform your reasoning before assigning scores.
+- Output your response as a JSON object matching the provided schema.
 """
 }
 
@@ -137,6 +179,34 @@ ROLE_CONSTRAINTS = {
 * **Append-Only Gatekeeping:** Because the environment is append-only, you must be hyper-vigilant. A single error allowed into the state will degrade all future rounds of the MMDP.
 * **Logical Consistency:** Ensure the current addition does not contradict any previously established facts in the "Global Report State."
 """
+}
+
+JSON_SCHEMA = {
+    "Macro Scoring": {
+        "type": "object",
+        "properties": {
+            "subject_coverage": {"type": "integer", "min": 0, "max": 5},
+            "global_flow": {"type": "integer", "min": 0, "max": 5},
+            "structural_score": {"type": "integer", "min": 0, "max": 5},
+            "tone_consistency": {"type": "integer", "min": 0, "max": 5},
+            "redundancy_penalty": {"type": "integer", "min": 0, "max": 5},
+            "global_reasoning": {"type": "string", "description": "High-level summary of the document's architectural quality."}
+        },
+        "required": ["subject_coverage", "global_flow", "structural_score", "tone_consistency", "redundancy_penalty", "global_reasoning"]
+    },
+
+    "Micro Scoring": {
+        "type": "object",
+        "properties": {
+            "logical_soundness": {"type": "integer", "min": 0, "max": 5},
+            "verifiability_score": {"type": "integer", "min": 0, "max": 5},
+            "technical_precision": {"type": "integer", "min": 0, "max": 5},
+            "info_density": {"type": "integer", "min": 0, "max": 5},
+            "hallucination_flag": {"type": "boolean"},
+            "local_audit_notes": {"type": "string", "description": "Observations on this chunk in one sentence."}
+        },
+        "required": ["logical_soundness", "verifiability_score", "technical_precision", "info_density", "hallucination_flag"]
+    }
 }
 
 

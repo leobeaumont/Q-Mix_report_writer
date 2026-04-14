@@ -52,8 +52,8 @@ class QMIXTrainer:
         buffer_capacity: int = 5000,
         batch_size: int = 32,
         grad_clip: float = 10.0,
-        token_penalty_weight: float = 0.1,
-        accuracy_reward_weight: float = 1.0,
+        token_weight: float = 0.1,
+        report_quality_weight: float = 1.0,
         device: str = "cpu",
     ):
         self.n_agents = n_agents  # with collector agent
@@ -65,8 +65,8 @@ class QMIXTrainer:
         self.target_update_interval = target_update_interval
         self.batch_size = batch_size
         self.grad_clip = grad_clip
-        self.token_penalty_weight = token_penalty_weight
-        self.accuracy_reward_weight = accuracy_reward_weight
+        self.token_weight = token_weight
+        self.report_quality_weight = report_quality_weight
         self.device = device
         self.training_step = 0
 
@@ -95,18 +95,16 @@ class QMIXTrainer:
 
     def compute_reward(
         self,
-        accuracy: float,
-        tokens_used: int,
-        max_tokens: int = 10000,
+        delta_report_score: float,
+        delta_token_goal: int,
     ) -> float:
-        """Compute composite reward: accuracy reward - token penalty.
+        """Compute composite reward: delta report score + delta token goal.
 
-        Goal: maximize accuracy, minimize token inference usage.
+        Goal: maximize the quality of addition, reward working toward a token goal.
         """
-        accuracy_reward = accuracy * self.accuracy_reward_weight
-        token_ratio = min(tokens_used / max_tokens, 1.0)
-        token_penalty = token_ratio * self.token_penalty_weight
-        return accuracy_reward - token_penalty
+        report_reward = delta_report_score * self.report_quality_weight
+        token_reward = delta_token_goal * self.token_weight
+        return report_reward + token_reward
 
     def select_actions(
         self,

@@ -9,7 +9,7 @@ QMIX-based multi-agent reinforcement learning that learns optimal communication 
 1. **GNN Message Passing** — Agents communicate through a learned graph topology
 2. **Per-Agent Q-Network** — GNN -> GRU (temporal) -> MLP (Q-values)
 3. **QMIX Mixing Network** — Monotonic: dQ_tot/dQ_i >= 0
-4. **Reward** = accuracy x w_acc - token_ratio x w_token
+4. **Reward** = $\Delta_{report \, score} \times w_{report \, score} + \Delta_{token \, goal} \times w_{token \, goal}$, where $\Delta_{report \, score}$ is the variation of the report score compared to its last state and $\Delta_{token \, goal}$ is the variation of the token goal score compared to its last state. The token goal score is calculated using a Gaussian curve centered around the token goal.
 
 
 ## QMIX Actions
@@ -108,4 +108,18 @@ Technical changes:
 - When an agent action is denied because of an append lock or a cycle, its action is defaulted to `solo_process`.
 - Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge (for `execute_verify` action) and mutual edge (for `debate` action).
 - Modified Q-Mix to only train and select actions for the 5 acting agents, while ignoring the `collector` node.
+- Added a dynamic `ReportState` singleton to track the report text, sources and a progress summary. The report state is updated by the `Collector` agents and the summary of progress is given as context to other agents.
+- The report state summary is embedded inside of the observation features as context for the Q-Mixer.
 
+### From a `post-process` to `in real time` reward system
+
+Agent-Q-Mix is trained on a set of problem solving database. To train the `Q-Mixer` they use the score based on the answers given by the model to each problem of the datasets. And a penalty is applied for token usage. This forces the model to be precise with few tokens.  
+
+In the `report writer` implementation, since the `Q-Mixer` is not used for problem solving, it can't be scored using answer `accuracy` anymore. On top of that, `report generation` is a longer process than `problem solving`. It means that it is possible and preferable to score the model while it is constructing the report, to help the model understand the quality of each of its decisions. This change is highly compatible with the new `append loop` architecture: every time content is added to the report with the `append` action, it is possible to score the quality of the addition and the token usage. The Q-Mixer reward can be computed mid-process using these scores. More precisely, the `variation of the scores` between the previous and the current state of the report gives a very good insight on how good the last addition was to the overall report. And the better the addition is, the better the reward will be.
+
+Technical changes:
+- Changed reward to $\Delta_{report \, score} \times w_{report \, score} + \Delta_{token \, goal} \times w_{token \, goal}$.
+- Added a toggleable `JSON` output format to the LLM handlers.
+- Added a `Micro Scoring` and `Macro Scoring` LLM judges used during training to help improve the quality of the production. The `Micro Scoring` judge scores each chunk of the document. The `Macro Scoring` judge scores the whole document. 
+- `Micro Scoring` judge is responsible for: logic, verifiability, technical precision, information density and hallucination flagging.
+- `Macro Scoring` judge is responsible for: subject coverage, flow, structure, tone and avoiding repetition.
