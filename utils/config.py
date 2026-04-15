@@ -19,7 +19,7 @@ def get_llm_config() -> dict:
     return get_config().get("llm", {})
 
 
-def get_llm(llm_name: str):
+def get_llm(llm_name: Optional[str] = None):
     """
     Instantiate an LLM from the registry using settings from default.yaml.
     
@@ -33,6 +33,8 @@ def get_llm(llm_name: str):
     """
     from llm.llm_registry import LLMRegistry
     llm_cfg = get_llm_config()
+    if llm_name is None:
+        llm_name = llm_cfg.get("default_model", "tinyllama")
     return LLMRegistry.get(
         llm_name,
         model_name=llm_name,

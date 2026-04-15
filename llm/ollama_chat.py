@@ -1,5 +1,5 @@
 import aiohttp
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Dict
 from tenacity import retry, wait_random_exponential, stop_after_attempt
 
 from .format import Message
@@ -26,7 +26,7 @@ def _get_ollama_endpoint() -> str:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
-async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, temperature: float = 0.2, json_mode: bool = False):
+async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, temperature: float = 0.2, response_schema: Optional[Dict] = None):
     """Send a query to a LLM using oLLama."""
     endpoint = _get_ollama_endpoint()
     headers = {
@@ -40,8 +40,15 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, 
         "temperature": temperature,
     }
 
-    if json_mode:
-        data["response_format"] = {"type": "json_object"}
+    if response_schema:
+        data["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "scores",
+                "strict": True,
+                "schema": response_schema
+            }
+        }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(endpoint, headers=headers, json=data) as response:
@@ -78,40 +85,40 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, 
 @LLMRegistry.register("deepseek-r1")
 @LLMRegistry.register("phi4")
 class OllamaChat(LLM):
-    def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024, json_mode: bool = False):
+    def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024, response_schema: Optional[Dict] = None):
         self.model_name = model_name
         self._temperature = temperature
         self._max_tokens = max_tokens
-        self._json_mode = json_mode
+        self._response_schema = response_schema
 
     async def agen(
         self,
         messages: List[Message],
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-        json_mode: Optional[bool] = None,
+        response_schema: Optional[Dict] = None,
         num_comps: Optional[int] = None,
     ) -> Union[List[str], str]:
         if max_tokens is None:
             max_tokens = self._max_tokens
         if temperature is None:
             temperature = self._temperature
-        if json_mode is None: 
-            json_mode = self._json_mode
+        if response_schema is None: 
+            response_schema = self._response_schema
 
         if isinstance(messages, str):
             messages = [Message(role="user", content=messages)]
         elif isinstance(messages, list) and all(isinstance(m, dict) for m in messages):
             messages = [Message(role=m["role"], content=m["content"]) for m in messages]
 
-        return await achat_ollama(self.model_name, messages, max_tokens=max_tokens, temperature=temperature, json_mode=json_mode)
+        return await achat_ollama(self.model_name, messages, max_tokens=max_tokens, temperature=temperature, response_schema=response_schema)
 
     def gen(
         self,
         messages: List[Message],
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-        json_mode: Optional[bool] = None,
+        response_schema: Optional[Dict] = None,
         num_comps: Optional[int] = None,
     ) -> Union[List[str], str]:
         import asyncio
@@ -120,5 +127,5 @@ class OllamaChat(LLM):
         if loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, self.agen(messages, max_tokens, temperature, json_mode, num_comps)).result()
-        return asyncio.run(self.agen(messages, max_tokens, temperature, json_mode, num_comps))
+                return pool.submit(asyncio.run, self.agen(messages, max_tokens, temperature, response_schema, num_comps)).result()
+        return asyncio.run(self.agen(messages, max_tokens, temperature, response_schema, num_comps))

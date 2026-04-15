@@ -32,7 +32,7 @@ from datasets import tasks
 from utils.log import get_logger
 from utils.globals import PromptTokens, CompletionTokens, ReportState, Score, LengthGoal
 from utils.config import get_config
-from experiments.eval import length_score
+from experiments.eval import length_score, report_score
 
 logger = get_logger("qmix_train")
 
@@ -102,7 +102,7 @@ async def run_episode(
 
         if (actions == 14).any():  # If any agent appended this step
             # We spread the reward to all previous step until previous append action
-            Score.instance().update(to_do)
+            Score.instance().update(await report_score())
             LengthGoal.instance().update(length_score(length_goal, length_sigma))
             delta_report_score = Score.instance().get_delta()
             delta_length_goal = LengthGoal.instance().get_delta()
@@ -201,6 +201,8 @@ async def train(args):
 
         total_reward = episode.total_reward
         score = Score.instance().current_score
+        if score is None:
+            score = 0
 
         trainer.replay_buffer.push(episode)
 

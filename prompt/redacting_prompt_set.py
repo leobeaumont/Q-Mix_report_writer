@@ -185,27 +185,35 @@ JSON_SCHEMA = {
     "Macro Scoring": {
         "type": "object",
         "properties": {
-            "subject_coverage": {"type": "integer", "min": 0, "max": 5},
-            "global_flow": {"type": "integer", "min": 0, "max": 5},
-            "structural_score": {"type": "integer", "min": 0, "max": 5},
-            "tone_consistency": {"type": "integer", "min": 0, "max": 5},
-            "redundancy_penalty": {"type": "integer", "min": 0, "max": 5},
-            "global_reasoning": {"type": "string", "description": "High-level summary of the document's architectural quality."}
+            "subject_coverage": {"type": "integer", "minimum": 0, "maximum": 5},
+            "global_flow": {"type": "integer", "minimum": 0, "maximum": 5},
+            "structural_score": {"type": "integer", "minimum": 0, "maximum": 5},
+            "tone_consistency": {"type": "integer", "minimum": 0, "maximum": 5},
+            "redundancy_penalty": {"type": "integer", "minimum": 0, "maximum": 5},
+            "global_reasoning": {"type": "string", "description": "High-level summary of quality."}
         },
-        "required": ["subject_coverage", "global_flow", "structural_score", "tone_consistency", "redundancy_penalty", "global_reasoning"]
+        "required": [
+            "subject_coverage", "global_flow", "structural_score", 
+            "tone_consistency", "redundancy_penalty", "global_reasoning"
+        ],
+        "additionalProperties": False
     },
 
     "Micro Scoring": {
         "type": "object",
         "properties": {
-            "logical_soundness": {"type": "integer", "min": 0, "max": 5},
-            "verifiability_score": {"type": "integer", "min": 0, "max": 5},
-            "technical_precision": {"type": "integer", "min": 0, "max": 5},
-            "info_density": {"type": "integer", "min": 0, "max": 5},
+            "logical_soundness": {"type": "integer", "minimum": 0, "maximum": 5},
+            "verifiability_score": {"type": "integer", "minimum": 0, "maximum": 5},
+            "technical_precision": {"type": "integer", "minimum": 0, "maximum": 5},
+            "info_density": {"type": "integer", "minimum": 0, "maximum": 5},
             "hallucination_flag": {"type": "boolean"},
-            "local_audit_notes": {"type": "string", "description": "Observations on this chunk in one sentence."}
+            "local_audit_notes": {"type": "string", "description": "Observations on this chunk."}
         },
-        "required": ["logical_soundness", "verifiability_score", "technical_precision", "info_density", "hallucination_flag"]
+        "required": [
+            "logical_soundness", "verifiability_score", "technical_precision", 
+            "info_density", "hallucination_flag", "local_audit_notes"
+        ],
+        "additionalProperties": False
     }
 }
 
@@ -222,6 +230,9 @@ class RedactingPromptSet(PromptSet):
 
     def get_description(self, role):
         return ROLE_DESCRIPTION.get(role, ROLE_DESCRIPTION["Technical Writer"])
+    
+    def get_schema(self, role):
+        return JSON_SCHEMA.get(role, JSON_SCHEMA["Macro Scoring"])
 
     def get_role_connection(self):
         pass

@@ -67,10 +67,14 @@ class Score(Singleton):
     def __init__(self):
         self.previous_score: Optional[float] = None
         self.current_score: Optional[float] = None
+        self.micro_scores: List[float] = []
+        self.micro_notes: List[str] = []
 
     def reset(self):
         self.previous_score = None
         self.current_score = None
+        self.micro_scores = []
+        self.micro_notes = []
 
     def get_delta(self):
         if self.previous_score is None:
