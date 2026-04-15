@@ -9,6 +9,7 @@ from .livecodebench_dataset import LiveCodeBenchDataset, LiveCodeBenchTestGenDat
 from .gaia_dataset import GAIADataset
 from .frontierscience_dataset import FrontierScienceDataset
 from .hle_dataset import HLEDataset
+from .tasks import tasks
 
 DATASET_REGISTRY = {
     # Coding

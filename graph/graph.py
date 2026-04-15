@@ -22,6 +22,7 @@ import shortuuid
 import numpy as np
 import torch
 import asyncio
+from tqdm import tqdm
 from typing import Any, List, Optional, Dict, Tuple
 
 from graph.node import Node
@@ -258,6 +259,7 @@ class QMIXGraph:
 
         queue = [nid for nid, deg in in_degree.items() if deg == 0]
         executed_this_round = set()
+        agents_pbar = tqdm(total=self.n_agents, desc="Agents", leave=False)
 
         while queue:
             current_id = queue.pop(0)
@@ -272,6 +274,7 @@ class QMIXGraph:
                         timeout=max_time,
                     )
                     executed_this_round.add(current_id)
+                    agents_pbar.update()
                     break
                 except Exception as e:
                     logger.warning(f"Node {current_id} attempt {attempt + 1} failed: {e}")
@@ -282,6 +285,8 @@ class QMIXGraph:
                 in_degree[successor.id] = max(in_degree.get(successor.id, 1) - 1, 0)
                 if in_degree[successor.id] == 0 and successor.id not in executed_this_round:
                     queue.append(successor.id)
+        
+        agents_pbar.close()
 
     def _clear_spatial(self):
         for node in self.nodes.values():

@@ -82,7 +82,7 @@ class Score(Singleton):
         self.previous_score = self.current_score
         self.current_score = new_score
 
-class TokenGoal(Singleton):
+class LengthGoal(Singleton):
     def __init__(self):
         self.previous_score: Optional[float] = None
         self.current_score: Optional[float] = None

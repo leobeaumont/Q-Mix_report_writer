@@ -52,7 +52,7 @@ class QMIXTrainer:
         buffer_capacity: int = 5000,
         batch_size: int = 32,
         grad_clip: float = 10.0,
-        token_weight: float = 0.1,
+        length_weight: float = 0.1,
         report_quality_weight: float = 1.0,
         device: str = "cpu",
     ):
@@ -65,7 +65,7 @@ class QMIXTrainer:
         self.target_update_interval = target_update_interval
         self.batch_size = batch_size
         self.grad_clip = grad_clip
-        self.token_weight = token_weight
+        self.length_weight = length_weight
         self.report_quality_weight = report_quality_weight
         self.device = device
         self.training_step = 0
@@ -96,15 +96,15 @@ class QMIXTrainer:
     def compute_reward(
         self,
         delta_report_score: float,
-        delta_token_goal: int,
+        delta_length_goal: int,
     ) -> float:
         """Compute composite reward: delta report score + delta token goal.
 
         Goal: maximize the quality of addition, reward working toward a token goal.
         """
         report_reward = delta_report_score * self.report_quality_weight
-        token_reward = delta_token_goal * self.token_weight
-        return report_reward + token_reward
+        length_reward = delta_length_goal * self.length_weight
+        return report_reward + length_reward
 
     def select_actions(
         self,

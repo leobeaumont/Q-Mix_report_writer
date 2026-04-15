@@ -16,9 +16,10 @@ qmix:
   epsilon_end: 0.05
 
 reward:
-  accuracy_weight: 1.0
-  token_penalty_weight: 0.1
-  max_tokens: 10000
+  report_quality_weight: 1.0
+  length_weight: 0.1
+  length_goal: 25000  # 25000 char -> ~4500 words -> ~1 scientific document
+  length_sigma: 8500  # sigma of the gaussian curve: 8500 -> reward start at ~5000 char 
 
 training:
   num_episodes: 500
