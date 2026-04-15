@@ -1,5 +1,6 @@
 import yaml
 from .const import PROJECT_ROOT
+from typing import Optional
 
 _config = None
 
