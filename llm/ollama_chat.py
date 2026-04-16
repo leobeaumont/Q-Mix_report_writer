@@ -26,7 +26,7 @@ def _get_ollama_endpoint() -> str:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
-async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, temperature: float = 0.2, response_schema: Optional[Dict] = None):
+async def achat_ollama(model_name: str, messages: list, max_tokens: int = 4096, temperature: float = 0.2, response_schema: Optional[Dict] = None):
     """Send a query to a LLM using oLLama."""
     endpoint = _get_ollama_endpoint()
     headers = {
@@ -79,11 +79,7 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 1024, 
 # The name must match exactly what you have pulled in Ollama (run `ollama list` to check).
 @LLMRegistry.register("tinyllama")
 @LLMRegistry.register("llama3.2")
-@LLMRegistry.register("llama3.1")
-@LLMRegistry.register("mistral")
-@LLMRegistry.register("qwen2.5")
-@LLMRegistry.register("deepseek-r1")
-@LLMRegistry.register("phi4")
+@LLMRegistry.register("phi3.5")
 class OllamaChat(LLM):
     def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024, response_schema: Optional[Dict] = None):
         self.model_name = model_name

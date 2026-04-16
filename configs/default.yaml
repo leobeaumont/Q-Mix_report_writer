@@ -33,7 +33,7 @@ evaluation:
 llm:
   default_model: tinyllama
   temperature: 0.2
-  max_tokens: 512
+  max_tokens: 4096
   ollama_base_url: http://localhost:11434
 
 agent_configs:

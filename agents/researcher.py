@@ -40,11 +40,19 @@ class Researcher(Node):
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
+        action = kwargs.get("action", None)
+        if action is not None and action == 8:
+            # Implement tool use here
+            pass
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         return self.llm.gen(message)
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
+        action = kwargs.get("action", None)
+        if action is not None and action == 8:
+            # Implement tool use here
+            pass
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         return await self.llm.agen(message)

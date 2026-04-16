@@ -225,7 +225,7 @@ class QMIXGraph:
             if round_idx > 0:
                 self._connect_temporal(round_idx)
 
-            await self._execute_round(input, max_tries, max_time)
+            await self._execute_round(input, max_tries, max_time, actions=actions)
             self._update_memory()
 
             round_idx += 1
@@ -242,7 +242,7 @@ class QMIXGraph:
 
         return final_text, total_tokens
 
-    async def _execute_round(self, input, max_tries, max_time):
+    async def _execute_round(self, input, max_tries, max_time, **kwargs):
         """Execute all nodes in topological order."""
         in_degree = {}
         for nid, node in self.nodes.items():
@@ -266,11 +266,14 @@ class QMIXGraph:
 
             if current_id in executed_this_round:
                 continue
+            
+            node_index = self.node_ids.index(current_id)
+            node_action = kwargs.get("actions", [None] * (node_index + 1))[node_index]
 
             for attempt in range(max_tries):
                 try:
                     await asyncio.wait_for(
-                        self.nodes[current_id].async_execute(input),
+                        self.nodes[current_id].async_execute(input, action=node_action),
                         timeout=max_time,
                     )
                     executed_this_round.add(current_id)
