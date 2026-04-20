@@ -139,6 +139,20 @@ Technical changes:
 
 ### Adding tool usage to the `execute_verify` action
 
+In the original implementation of Agent-Q-Mix, the `solo_process` and `execute_verify` actions have the same graph topology. The agent acts alone without creating communication edges to other agent. 
+
+In the report writing implementation, the graph accepts self edges (A -> A) that are created when the node uses the `execute_verify` action. The self edge is used to implement tool usage, to enrich the context of the agent. `execute_verify` will first communicate with the tool. Then, once the tool response is available, the agent will process its turn with the tool response added to its context.
+
+The first tool implemented is a `RAG` tool (Retrieval Augmented Generation). It is exclusive to the `Researcher` agent. When used, it lets the agent search for sources documents from a database. The sources used during report generation are tracked, to ensure proper citation and verifiability of the final result.
+
 Technical changes:
 - The selected `action` is passed from the graph's main loop (`arun` method) to the agent's execution (`async_execute` method).
 - When an agent `execute`, it can trigger tools and modify its prompt depending on the `action` received.
+- Implemented `RAG` database inside of `tools/rag`. The `RAG` also uses `oLLama` to ensure the privacy of all the documents. The whole production loop (embedding / storing / querying / generation) is fully local, and doesn't require any network connection.
+- The current implementation of the `RAG` uses the `ChromaDB` library.
+- Added a `SourceBuffer` singleton to track the sources used to generate each part of the report. The buffer stores the sources given by the `RAG` tool to generate the current report part and it is flushed when the part is added to the `ReportState`. Once flushed, the sources are stored in the `ReportState` with their respective part.
+- The `Collector` agent is responsible for flushing the sources from the `SourceBuffer` and storing them inside of the `ReportState` when processing an `append` action.
+- When a `Researcher` agent execute an `execute_verify` action, it start by generating a query to the `RAG` tool, using its current context. The query is then used on the `RAG` database to find relevent chunks of information. These chunks are then added to the `Researcher`'s context before generating its notes for the next round of communication.
+- To respect the graph architecture of the project, the `RAG`'s selected documents are passed to the `Researcher` agent via a `spatial` edge. With this representation, the tool can be represented by a node just like any other agent.
+- Wrote prompt for preparing the query given to the `RAG` tool. The query is prepared with the communication context of the `Researcher` agent and aims to formulate a precise and effective query.
+- Added `ChromaDB` and `ollama` libraries to the requirements. `ChromaDB` is used to handle the vectorial database and `ollama` is used to embed the query locally using oLLama (to avoid data leaks).  

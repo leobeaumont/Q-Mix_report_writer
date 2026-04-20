@@ -8,19 +8,4 @@ __pycache__/
 *.pt
 *.log
 .venv
-
-# Exclude ablation and mercury
-checkpoints_ablation/
-checkpoints_ablation_gpt/
-result_ablation/
-result_ablation_gpt/
-checkpoints_mercury/
-result_mercury/
-scripts/run_all_mercury.sh
-scripts/run_gpt_ablation.sh
-scripts/run_all_gemini_ablation.sh
-
-# Exclude agent_baseline secrets and mercury
-agent_baseline/.env
-agent_baseline/results_mercury/
-agent_baseline/script/run_all_mercury.sh
+chroma_data/

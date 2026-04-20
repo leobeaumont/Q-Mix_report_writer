@@ -1,7 +1,7 @@
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
-from utils.globals import ReportState
+from utils.globals import ReportState, SourceBuffer
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -15,6 +15,7 @@ class Collector(Node):
         self.prompt_set = PromptSetRegistry.get("collector")
         self.role = role or "Collector"
         self.report = ReportState.instance()
+        self.source_buffer = SourceBuffer.instance()
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs): 
         system_prompt = self.prompt_set.get_role() 
@@ -54,7 +55,8 @@ Based on the rules in the system prompt, output the cleaned and transitioned ver
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         response2 = self.llm.agen(message)
 
-        self.report.append(response1, response2)
+        new_sources = self.source_buffer.flush()
+        self.report.append(response1, response2, new_sources)
         return response1
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):

@@ -1,7 +1,8 @@
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
+from tools.rag import RAGManager
 from utils.config import get_llm
-from utils.globals import ReportState
+from utils.globals import ReportState, SourceBuffer
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -15,6 +16,7 @@ class Researcher(Node):
         self.prompt_set = PromptSetRegistry.get("redacting")
         self.role = role or "Researcher"
         self.report = ReportState.instance()
+        self.rag = RAGManager()
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
@@ -40,31 +42,53 @@ class Researcher(Node):
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
-        action = kwargs.get("action", None)
+        # Tool use
+        action = kwargs.get("action", 8)
         if action == 8:  # when using execute_verify
-            # Implement tool use here
-            pass
+            system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
+            _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+            message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+            query = self.llm.gen(message)
+            documents = self.rag.query_docs(query)
+            for i, document in enumerate(documents):
+                citation = f"<source> {document["source"]} </source>\n<content>\n{document["content"]}\n</content>"
+                spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
+                SourceBuffer.instance().add(document)
+        
+        # Base execution
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         return self.llm.gen(message)
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
-        action = kwargs.get("action", None)
+        # Tool use
+        action = kwargs.get("action", 8)
         if action == 8:  # when using execute_verify
-            # Implement tool use here
-            pass
+            system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
+            _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+            message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+            query = await self.llm.agen(message)
+            documents = self.rag.query_docs(query)
+            for i, document in enumerate(documents):
+                citation = f"<source> {document["source"]} </source>\n<content>\n{document["content"]}\n</content>"
+                spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
+                SourceBuffer.instance().add(document)
+        
+        # Base execution
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         return await self.llm.agen(message)
 
 if __name__ == "__main__":
+    import asyncio
     input_arg = {"task": "write a report"}
     spatial = {"1": {"role": "Other Agent", "output": "Message from other agent"}}
     temporal = {"0": {"role": "This agent", "output": "Message from last round"}}
     col = Researcher(llm_name="tinyllama")
 
-    system, user = col._process_inputs(input_arg, spatial, temporal)
+    asyncio.run(col.async_execute(input_arg))
+    """system, user = col._process_inputs(input_arg, spatial, temporal)
 
     print(system)
     print("=" * 60)
-    print(user)
+    print(user)"""

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class Singleton:
     _instance = None
@@ -104,3 +104,18 @@ class LengthGoal(Singleton):
     def update(self, new_score):
         self.previous_score = self.current_score
         self.current_score = new_score
+
+class SourceBuffer(Singleton):
+    def __init__(self):
+        self.sources = []
+
+    def reset(self):
+        self.sources = []
+
+    def add(self, source: Dict):
+        self.sources.append(source)
+
+    def flush(self) -> List[Dict]:
+        out = self.sources
+        self.reset()
+        return out
