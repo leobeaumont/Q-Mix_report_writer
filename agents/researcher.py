@@ -41,7 +41,7 @@ class Researcher(Node):
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         action = kwargs.get("action", None)
-        if action is not None and action == 8:
+        if action == 8:  # when using execute_verify
             # Implement tool use here
             pass
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
@@ -50,7 +50,7 @@ class Researcher(Node):
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         action = kwargs.get("action", None)
-        if action is not None and action == 8:
+        if action == 8:  # when using execute_verify
             # Implement tool use here
             pass
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
