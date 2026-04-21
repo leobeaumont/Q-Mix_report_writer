@@ -119,3 +119,41 @@ class SourceBuffer(Singleton):
         out = self.sources
         self.reset()
         return out
+
+class ExecutionTrace(Singleton):
+    """ 
+    Log of the whole execution process.
+
+    The trace is a list of round, the data of each round is stored in a dict:
+
+    trace = [
+        # Round 1 data
+        {
+            "exec_order": [0, 1, 2, 3, 4, 5, 6]  # Agent exec order
+            "agent_0": {
+                "action": 0
+                "message_to": [4, 5]
+                "prompt": agent0.prompt
+                "response": agent0.response
+            },
+            "agent_1": {
+
+                ...
+
+            },
+
+            ...
+
+            "agent_5": {
+            
+                ...
+            
+            }
+        }
+    ]
+    """
+    def __init__(self):
+        self.trace: List[Dict] = []
+
+    def reset(self):
+        self.trace = []

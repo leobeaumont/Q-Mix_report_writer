@@ -30,7 +30,7 @@ from qmix.agent_network import NUM_ACTIONS
 from graph.graph import QMIXGraph
 from datasets import tasks
 from utils.log import get_logger
-from utils.globals import PromptTokens, CompletionTokens, ReportState, Score, LengthGoal
+from utils.globals import PromptTokens, CompletionTokens, ReportState, Score, LengthGoal, ExecutionTrace
 from utils.config import get_config
 from experiments.eval import length_score, report_score
 
@@ -64,6 +64,7 @@ async def run_episode(
     ReportState.instance().reset()
     Score.instance().reset()
     LengthGoal.instance().reset()
+    ExecutionTrace.instance().reset()
     n_agents = graph.n_agents
 
     hidden = trainer.agent_network.init_hidden(n_agents)
@@ -121,6 +122,8 @@ async def run_episode(
     
     for previous_step in step_buffer:  # All unused steps in buffer are pushed with reward = 0
         episode.add_step(previous_step)
+
+    print(ExecutionTrace.instance().trace)
 
     round_pbar.close()
 
@@ -188,6 +191,7 @@ async def train(args):
         graph = QMIXGraph(
             llm_name=args.llm_name,
             agent_names=agent_names,
+            execution_trace=True,
         )
 
         episode, _ = await run_episode(

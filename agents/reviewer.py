@@ -40,14 +40,26 @@ class Reviewer(Node):
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
+        execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        if execution_trace:
+            execution_trace.trace[-1]["Reviewer"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        return self.llm.gen(message)
+        response = self.llm.gen(message)
+        if execution_trace:
+            execution_trace.trace[-1]["Reviewer"]["response"] = response
+        return response
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
+        execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        if execution_trace:
+            execution_trace.trace[-1]["Reviewer"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        return await self.llm.agen(message)
+        response = await self.llm.agen(message)
+        if execution_trace:
+            execution_trace.trace[-1]["Reviewer"]["response"] = response
+        return response
 
 if __name__ == "__main__":
     input_arg = {"task": "write a report"}

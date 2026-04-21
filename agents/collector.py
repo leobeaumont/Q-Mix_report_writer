@@ -46,9 +46,15 @@ Based on the rules in the system prompt, output the cleaned and transitioned ver
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
+        execution_trace = kwargs.get("execution_trace", None)
+        
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        if execution_trace:
+            execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         response1 = self.llm.agen(message)
+        if execution_trace:
+            execution_trace.trace[-1]["Collector"]["response"] = response1
 
         previous_progress = self.report.progress
         system_prompt, user_prompt = self._progress_prompt(previous_progress, response1)
@@ -62,9 +68,15 @@ Based on the rules in the system prompt, output the cleaned and transitioned ver
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
+        execution_trace = kwargs.get("execution_trace", None)
+
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        if execution_trace:
+            execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         response1 = await self.llm.agen(message)
+        if execution_trace:
+            execution_trace.trace[-1]["Collector"]["response"] = response1
 
         previous_progress = self.report.progress
         system_prompt, user_prompt = self._progress_prompt(previous_progress, response1)

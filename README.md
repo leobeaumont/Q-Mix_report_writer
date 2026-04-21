@@ -1,5 +1,7 @@
 # Agent Q-Mix: QMIX for Multi-Agent Communication Topology Optimization
 
+**REQUIRES: Python >= 3.10**
+
 QMIX-based multi-agent reinforcement learning that learns optimal communication topologies for LLM agent collaboration. Maximizes task accuracy while minimizing token usage.
 
 ## Architecture
@@ -155,4 +157,12 @@ Technical changes:
 - When a `Researcher` agent execute an `execute_verify` action, it start by generating a query to the `RAG` tool, using its current context. The query is then used on the `RAG` database to find relevent chunks of information. These chunks are then added to the `Researcher`'s context before generating its notes for the next round of communication.
 - To respect the graph architecture of the project, the `RAG`'s selected documents are passed to the `Researcher` agent via a `spatial` edge. With this representation, the tool can be represented by a node just like any other agent.
 - Wrote prompt for preparing the query given to the `RAG` tool. The query is prepared with the communication context of the `Researcher` agent and aims to formulate a precise and effective query.
-- Added `ChromaDB` and `ollama` libraries to the requirements. `ChromaDB` is used to handle the vectorial database and `ollama` is used to embed the query locally using oLLama (to avoid data leaks).  
+- Added `ChromaDB` and `ollama` libraries to the requirements. `ChromaDB` is used to handle the vectorial database and `ollama` is used to embed the query locally using oLLama (to avoid data leaks).
+
+### Adding animated graph visualization
+
+WRITE TEXT ON GRAPH VISU HERE
+
+Technical changes:
+- Implemented a full `ExecutionTrace` singleton. Every action is tracked with intra-round order and context.
+- When the graph is initiated with `execution_trace = True`, the whole process trace is stored inside the `ExecutionTrace` object.

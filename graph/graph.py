@@ -29,7 +29,7 @@ from graph.node import Node
 from prompt.prompt_set_registry import PromptSetRegistry
 from qmix.agent_network import ACTION_NAMES
 from utils.log import get_logger
-from utils.globals import PromptTokens, CompletionTokens, ReportState
+from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace
 
 logger = get_logger("graph")
 
@@ -80,6 +80,7 @@ class QMIXGraph:
         llm_name: str,
         agent_names: List[str],
         fixed_topology: str = None,
+        execution_trace: bool = False
     ):
         self.id = shortuuid.ShortUUID().random(length=4)
         self.llm_name = llm_name
@@ -97,6 +98,8 @@ class QMIXGraph:
             self._fixed_adj = TOPOLOGY_PRESETS[fixed_topology](self.n_agents)
         else:
             self._fixed_adj = None
+
+        self.execution_trace = ExecutionTrace.instance() if execution_trace else None
 
     def _init_nodes(self):
         from agents.agent_registry import AgentRegistry
@@ -168,17 +171,23 @@ class QMIXGraph:
                         dst = self.nodes[self.node_ids[j]]
                         if not self._check_cycle(dst, {src}):
                             src.add_successor(dst, "spatial")
+                            if self.execution_trace:
+                                self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[j])
             elif action >= 2 and action <= 6:  # selective query
                 best_j = action - 2
                 dst = self.nodes[self.node_ids[best_j]]
                 if not self._check_cycle(dst, {src}):
                     src.add_successor(dst, "spatial")
+                    if self.execution_trace:
+                        self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[best_j])
             elif action == 7:  # aggregate (receive from all acting nodes)
                 for j in range(n_acting):
                     if j != i:
                         other = self.nodes[self.node_ids[j]]
                         if not self._check_cycle(src, {other}):
                             other.add_successor(src, "spatial")
+                            if self.execution_trace:
+                                self.execution_trace.trace[-1][self.agent_names[j]]["message_to"].append(self.agent_names[i])
             elif action == 8:  # execute_verify (self communication for tool use)
                 src.add_successor(src, "spatial")
             elif action >= 9 and action <= 13:  # debate
@@ -188,9 +197,14 @@ class QMIXGraph:
                     if not self._check_cycle(dst, {src}):
                         src.add_successor(dst, "spatial")
                         dst.add_successor(src, "spatial")
+                        if self.execution_trace:
+                                self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[partner])
+                                self.execution_trace.trace[-1][self.agent_names[partner]]["message_to"].append(self.agent_names[i])
             elif action == 14:  # append
                 collector = self.nodes[self.node_ids[5]]
                 src.add_successor(collector, "spatial")
+                if self.execution_trace:
+                    self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[5])
             elif action == 15:  # terminate (when a majority wants it)
                 terminate_votes += 1
                 if terminate_votes >= n_acting / 2:
@@ -217,6 +231,16 @@ class QMIXGraph:
 
         round_idx = 0
         while round_idx < num_rounds and not self.terminated:
+
+            if self.execution_trace:
+                round_template = {f"{self.agent_names[i]}": {"action": action,
+                                                             "message_to": [],
+                                                             "prompt": None,
+                                                             "response": None} for i, action in enumerate(actions.tolist() + [None])}
+                round_template["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None}
+                round_template["exec_order"] = []
+                self.execution_trace.trace.append(round_template)
+
             if actions is not None:
                 self.apply_qmix_actions(actions)
             elif self._fixed_adj is not None:
@@ -268,15 +292,17 @@ class QMIXGraph:
                 continue
             
             node_index = self.node_ids.index(current_id)
-            node_action = kwargs.get("actions", [None] * (node_index + 1))[node_index]
+            node_action = kwargs.get("actions", [None] * (node_index + 1))[node_index] if node_index != 5 else None
 
             for attempt in range(max_tries):
                 try:
                     await asyncio.wait_for(
-                        self.nodes[current_id].async_execute(input, action=node_action),
+                        self.nodes[current_id].async_execute(input, action=node_action, execution_trace=self.execution_trace),
                         timeout=max_time,
                     )
                     executed_this_round.add(current_id)
+                    if self.execution_trace:
+                        self.execution_trace.trace[-1]["exec_order"].append(self.agent_names[node_index])
                     agents_pbar.update()
                     break
                 except Exception as e:
@@ -385,3 +411,16 @@ class QMIXGraph:
             self.n_agents,
         ])
         return np.concatenate([obs.flatten(), graph_stats])
+
+
+if __name__ == "__main__":
+    agent_names = ["LeadArchitect", "Researcher", "DataAnalyst", "TechnicalWriter", "Reviewer", "Collector"]
+    actions = torch.tensor([range(5)])
+    round_template = {f"{agent_names[i]}": {"action": action,
+                                                "message_to": [],
+                                                "prompt": None,
+                                                "response": None} for i, action in enumerate(actions.flatten().tolist() + [None])}
+    round_template["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None}
+    round_template["execution_order"] = []
+
+    print(round_template)
