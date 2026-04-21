@@ -43,7 +43,7 @@ class Researcher(Node):
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         # Tool use
-        action = kwargs.get("action", 8)
+        action = kwargs.get("action", None)
         if action == 8:  # when using execute_verify
             system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
             _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
@@ -62,7 +62,7 @@ class Researcher(Node):
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         # Tool use
-        action = kwargs.get("action", 8)
+        action = kwargs.get("action", None)
         if action == 8:  # when using execute_verify
             system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
             _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
@@ -81,14 +81,33 @@ class Researcher(Node):
 
 if __name__ == "__main__":
     import asyncio
-    input_arg = {"task": "write a report"}
+    import shortuuid
+    input_arg = {"task": "What is the purity rate of Graphene?"}
     spatial = {"1": {"role": "Other Agent", "output": "Message from other agent"}}
     temporal = {"0": {"role": "This agent", "output": "Message from last round"}}
     col = Researcher(llm_name="tinyllama")
 
+    dummy_docs = [
+        "The boiling point of Liquid X-42 is 156.4 degrees Celsius under standard pressure.",
+        "Graphene synthesis via chemical vapor deposition shows a 98% purity rate when using copper substrates.",
+        "The proprietary 'Alpha-Protocol' requires a mixture of 10% Argon and 90% Nitrogen for stable plasma.",
+        "Clinical trials for Compound-9 revealed a significant reduction in neural inflammation within 48 hours."
+    ]
+
+    metadatas = [
+        {"source_name": "Lab_Results_2026.pdf"},
+        {"source_name": "Material_Science_Journal.docx"},
+        {"source_name": "Engineering_Manual_v2.txt"},
+        {"source_name": "Medical_Report_Draft.pdf"}
+    ]
+
+    ids = [f"id_{shortuuid.uuid()}" for _ in range(len(dummy_docs))]
+    col.rag.add_documents(dummy_docs, metadatas, ids)
+
     asyncio.run(col.async_execute(input_arg))
-    """system, user = col._process_inputs(input_arg, spatial, temporal)
+    print(SourceBuffer.instance().sources)
+    system, user = col._process_inputs(input_arg, spatial, temporal)
 
     print(system)
     print("=" * 60)
-    print(user)"""
+    print(user)
