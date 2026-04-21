@@ -123,7 +123,7 @@ async def run_episode(
     for previous_step in step_buffer:  # All unused steps in buffer are pushed with reward = 0
         episode.add_step(previous_step)
 
-    print(ExecutionTrace.instance().trace)
+    ExecutionTrace.instance().save_trace()
 
     round_pbar.close()
 

@@ -1,4 +1,5 @@
 from typing import List, Optional, Dict
+import json
 
 class Singleton:
     _instance = None
@@ -157,3 +158,12 @@ class ExecutionTrace(Singleton):
 
     def reset(self):
         self.trace = []
+
+    def save_trace(self, filename="execution_trace.json"):
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(self.trace, f, indent=4, ensure_ascii=False)
+        print(f"Trace successfully saved to {filename}")
+
+    def load_trace(self, filename="execution_trace.json"):
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)

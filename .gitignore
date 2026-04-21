@@ -9,3 +9,5 @@ __pycache__/
 *.log
 .venv
 chroma_data/
+*.json
+*.html
