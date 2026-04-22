@@ -1,7 +1,7 @@
 import math
 from utils.globals import ExecutionTrace
 from bokeh.plotting import figure, show
-from bokeh.models import ColumnDataSource, HoverTool, CustomJS, Slider, Arrow, VeeHead, Div
+from bokeh.models import ColumnDataSource, HoverTool, CustomJS, Slider, Arrow, VeeHead, Div, Button
 from bokeh.layouts import column, row
 from bokeh.io import output_file
 from typing import List
@@ -160,9 +160,9 @@ class StandaloneVisualizer:
             }
 
         self.plot = figure(
-            title="Agent Communication Trace",
+            title="Agent Communication Topology",
             x_range=(-radius-50, radius+50), y_range=(-radius-50, radius+50),
-            tools="pan,wheel_zoom,reset,save", toolbar_location="above", match_aspect=True,
+            tools="save", toolbar_location="above", match_aspect=True,
             width=500, height=800,
         )
         self.plot.axis.visible = False
@@ -257,8 +257,47 @@ class StandaloneVisualizer:
             window.bokehAnimationID = requestAnimationFrame(animate);
         """)
 
-        self.slider = Slider(start=0, end=len(self.global_steps) - 1, value=0, step=1, title="Execution Step", sizing_mode="stretch_width")
+        # 1. Update Slider to be narrower
+        self.slider = Slider(start=0, end=len(self.global_steps) - 1, value=0, step=1,
+                             width=1000, show_value=False, bar_color="#00000062")
         self.slider.js_on_change('value', callback)
+
+        # 2. Define Control Buttons
+        self.prev_btn = Button(label="◀ Previous", width=80, button_type="primary")
+        self.next_btn = Button(label="Next ▶", width=80, button_type="primary")
+        self.play_btn = Button(label="► Play", width=80, button_type="success")
+
+        # 3. Add Button Logic via CustomJS
+        self.prev_btn.js_on_click(CustomJS(args=dict(s=self.slider), code="""
+            if (s.value > s.start) s.value -= 1;
+        """))
+
+        self.next_btn.js_on_click(CustomJS(args=dict(s=self.slider), code="""
+            if (s.value < s.end) s.value += 1;
+        """))
+
+        # Play/Pause Logic
+        self.play_btn.js_on_click(CustomJS(args=dict(s=self.slider, btn=self.play_btn), code="""
+            if (window.playInterval) {
+                clearInterval(window.playInterval);
+                window.playInterval = null;
+                btn.label = "► Play";
+                btn.button_type = "success";
+            } else {
+                btn.label = "❚❚ Pause";
+                btn.button_type = "danger";
+                window.playInterval = setInterval(() => {
+                    if (s.value < s.end) {
+                        s.value += 1;
+                    } else {
+                        clearInterval(window.playInterval);
+                        window.playInterval = null;
+                        btn.label = "► Play";
+                        btn.button_type = "success";
+                    }
+                }, 750); // 1 second per step
+            }
+        """))
 
     def _calculate_coords(self, agent_names: List[str]):
         return {name: (self.radius * math.cos(2*math.pi*i/self.n_agents), 
@@ -322,10 +361,20 @@ class StandaloneVisualizer:
     
     def show(self):
         output_file("agent_trace.html")
-        # Layout: Slider on top, Plot, Info, and Report side-by-side
+        
+        # Create the control bar row
+        controls = row( 
+            self.prev_btn, 
+            self.play_btn, 
+            self.next_btn, 
+            self.slider,
+            spacing=10, 
+            align="center"
+        )
+
         final_layout = column(
             self.style_fix,
-            self.slider, 
+            controls, # Use the new controls row instead of just self.slider
             row(self.plot, self.info_panel, self.report_panel, sizing_mode="stretch_height"),
             sizing_mode="stretch_both"
         )
