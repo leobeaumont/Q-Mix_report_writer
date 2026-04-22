@@ -25,21 +25,44 @@ class StandaloneVisualizer:
             exec_order = r_data.get("exec_order", [])
             for num_executed in range(len(exec_order) + 1):
                 self.global_steps.append((r_idx, num_executed))
+
+        self.style_fix = Div(text="""
+            <style>
+                body { 
+                    margin: 0 !important; 
+                    padding: 0 !important; 
+                    overflow: hidden !important; 
+                }
+            </style>
+        """)
         
         # 1. Setup Data Sources
         node_data, edge_data, _ = self._get_step_data(0, 0)
         self.node_source = ColumnDataSource(data=node_data)
         self.edge_source = ColumnDataSource(data=edge_data)
         
-        # 2. Create the Info Panel (The right-hand side text display)
+        # 2. Create the Panels
         self.info_panel = Div(
-            text="<div style='font-family: sans-serif;'><h1>Step Details</h1><p>Move the slider to see agent interactions.</p></div>",
-            width=450,
+            text="<div style='font-family: sans-serif;'><h1>Step Details</h1></div>",
+            width=440,
             styles={
                 "background-color": "#fdfdfd",
                 "padding": "20px",
-                "border-left": "2px solid #eee",
-                "height": "600px",
+                "border-left": "2px solid #f1c40f",
+                "height": "87vh",
+                "overflow-y": "auto"
+            }
+        )
+
+        # NEW: The Report Panel
+        self.report_panel = Div(
+            text="<div style='font-family: sans-serif;'><h1>Current Report</h1><p>Waiting for Collector...</p></div>",
+            width=440,
+            styles={
+                "background-color": "#ffffff",
+                "padding": "20px",
+                "border-left": "2px solid #2ecc71",
+                "height": "87vh",
                 "overflow-y": "auto",
                 "box-shadow": "-2px 0 5px rgba(0,0,0,0.05)"
             }
@@ -47,58 +70,68 @@ class StandaloneVisualizer:
 
         # 3. Store ALL steps with round, execution info, and Dynamic HTML
         all_steps_data = {}
+        latest_report_html = "<i>No report content generated yet.</i>"
+
         for global_idx, (r_idx, num_executed) in enumerate(self.global_steps):
             n, e, rid = self._get_step_data(r_idx, num_executed)
             
-            # Generate HTML description for this step
             current_round_data = self.trace[r_idx]
             exec_order = current_round_data.get("exec_order", [])
-            active_agent = exec_order[num_executed - 1] if num_executed > 0 else "None (Start of Round)"
             
+            # Identify which agent just acted
+            last_agent_to_act = exec_order[num_executed - 1] if num_executed > 0 else None
+            # Identify which agent is currently active/selected
+            active_agent = last_agent_to_act if last_agent_to_act else "None (Start of Round)"
+            
+            # --- UPDATED REPORT LOGIC ---
+            # Only update the stored report text IF the Collector was the one who just finished acting
+            if last_agent_to_act == "Collector":
+                collector_data = current_round_data.get("Collector", {})
+                report_md = collector_data.get("report_state")
+                if report_md:
+                    latest_report_html = markdown.markdown(report_md, extensions=['fenced_code', 'tables'])
+
+            # Wrap the report in a "bubble" style matching your other panels
+            report_bubble_html = f"""
+                <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+                    <h2 style="color: #2c3e50; border-bottom: 2px solid #2ecc71; padding-bottom: 10px;">Current Report State</h2>
+                    <div style="background: #ebfaf0; padding: 15px; border-radius: 8px; border-left: 5px solid #2ecc71; margin-top: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); color: #2f3640;">
+                        {latest_report_html}
+                    </div>
+                </div>
+            """
 
             action_val = None
-            if num_executed > 0 and active_agent in current_round_data:
-                action_val = current_round_data[active_agent].get('action', None)
+            if num_executed > 0 and last_agent_to_act in current_round_data:
+                action_val = current_round_data[last_agent_to_act].get('action', None)
 
             action_names = [
-            "Solo process",  # 0
-            "Broadcast",  #1
-            "Selective query to LeadArchitect",  #2
-            "Selective query to Researcher",  # 3
-            "Selective query to DataAnalyst",  # 4
-            "Selective query to TechnicalWriter",  # 5
-            "Selective query to Reviewer",  # 6 
-            "Aggregate",  # 7
-            "Execute verify",  # 8
-            "Debate with LeadArchitect",  # 9
-            "Debate with Researcher",  # 10
-            "Debate with DataAnalyst",  # 11
-            "Debate with TechnicalWriter",  # 12
-            "Debate with Reviewer",  # 13
-            "Append",  # 14
-            "Terminate"  # 15
+                "Solo process", "Broadcast", "Selective query to LeadArchitect", 
+                "Selective query to Researcher", "Selective query to DataAnalyst", 
+                "Selective query to TechnicalWriter", "Selective query to Reviewer", 
+                "Aggregate", "Execute verify", "Debate with LeadArchitect", 
+                "Debate with Researcher", "Debate with DataAnalyst", 
+                "Debate with TechnicalWriter", "Debate with Reviewer", 
+                "Append", "Terminate"
             ]
 
-            action_name = action_names[action_val] if action_val is not None else "None"
-
+            action_name = action_names[action_val] if (action_val is not None and action_val < len(action_names)) else "None"
             step_html = f"""
                 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #34495e;">
                     <h2 style="margin-top: 0; color: #2c3e50; border-bottom: 2px solid #f1c40f; padding-bottom: 10px;">
                         Round {r_idx} <small style="color: #bdc3c7; font-weight: normal;">(Step {global_idx})</small>
                     </h2>
-                    <p><b>Agent Action:</b> 
-                        <span style="background: #2c3e50; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: bold; font-family: monospace;">
+                    <p style="font-size: 1.1em;"><b>Agent Action:</b> 
+                        <span style="background: #b08f0c; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: bold; font-family: monospace;">
                             { action_name }
                         </span>
                     </p>
-                    <p style="font-size: 1.1em;"><b>Active Agent:</b> <code style="color: #e67e22;">{active_agent}</code></p>
+                    <p style="font-size: 1.1em;"><b>Active Agent: <code style="color: #b08f0c;">{active_agent}</code></b></p>
                     <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
             """
             
-            if num_executed > 0 and active_agent in current_round_data:
-                agent_info = current_round_data[active_agent]
-                
-                # Defensive check: use 'or' to handle None values safely
+            if num_executed > 0 and last_agent_to_act in current_round_data:
+                agent_info = current_round_data[last_agent_to_act]
                 prompt_md = agent_info.get('prompt') or 'N/A'
                 response_md = agent_info.get('response') or 'N/A'
                 
@@ -122,14 +155,15 @@ class StandaloneVisualizer:
                 'edges': e, 
                 'round_id': rid,
                 'num_executed': num_executed,
-                'step_text': step_html
+                'step_text': step_html,
+                'report_text': report_bubble_html # Using the bubble variable here
             }
 
         self.plot = figure(
             title="Agent Communication Trace",
             x_range=(-radius-50, radius+50), y_range=(-radius-50, radius+50),
             tools="pan,wheel_zoom,reset,save", toolbar_location="above", match_aspect=True,
-            width=600, height=700,
+            width=500, height=800,
         )
         self.plot.axis.visible = False
         self.plot.grid.grid_line_color = None
@@ -150,15 +184,21 @@ class StandaloneVisualizer:
             ("Agent", "@agent_id"),
         ]))
 
-        # Updated CustomJS to handle the side-panel text update
-        callback = CustomJS(args=dict(n_src=self.node_source, e_src=self.edge_source, info=self.info_panel, all_data=all_steps_data), code="""
+        # Updated CustomJS to include the report panel
+        callback = CustomJS(args=dict(
+            n_src=self.node_source, 
+            e_src=self.edge_source, 
+            info=self.info_panel, 
+            report=self.report_panel, # Pass new panel
+            all_data=all_steps_data
+        ), code="""
             const step = Math.round(cb_obj.value).toString();
             const targetData = all_data[step];
             
-            // 1. Update the Right Panel Text Immediately
+            // Update the Panels
             info.text = targetData['step_text'];
+            report.text = targetData['report_text']; // Update report text
             
-            // 2. Animation & Graph Update Logic
             if (window.currentRound === undefined) window.currentRound = 0;
             const roundChanged = window.currentRound !== targetData['round_id'];
             window.currentRound = targetData['round_id'];
@@ -279,13 +319,14 @@ class StandaloneVisualizer:
                     e_data["alpha"].append(0.8 if is_visible else 0.0)
         
         return n_data, e_data, round_idx
-
+    
     def show(self):
         output_file("agent_trace.html")
-        # Layout: Slider on top, Plot and Info side-by-side
+        # Layout: Slider on top, Plot, Info, and Report side-by-side
         final_layout = column(
+            self.style_fix,
             self.slider, 
-            row(self.plot, self.info_panel, sizing_mode="stretch_both"),
+            row(self.plot, self.info_panel, self.report_panel, sizing_mode="stretch_height"),
             sizing_mode="stretch_both"
         )
         show(final_layout)
