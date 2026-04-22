@@ -51,6 +51,9 @@ class Researcher(Node):
             _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
             if execution_trace:
                 execution_trace.trace[-1]["RAG"]["prompt"] = system_prompt + user_prompt
+                execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
+                execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
+                execution_trace.trace[-1]["exec_order"].append("RAG")
             message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
             query = self.llm.gen(message)
             documents = self.rag.query_docs(query)

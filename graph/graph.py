@@ -238,6 +238,7 @@ class QMIXGraph:
                                                              "prompt": None,
                                                              "response": None} for i, action in enumerate(actions.tolist() + [None])}
                 round_template["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None}
+                round_template["Collector"]["report_state"] = ReportState.instance().content
                 round_template["exec_order"] = []
                 self.execution_trace.trace.append(round_template)
 

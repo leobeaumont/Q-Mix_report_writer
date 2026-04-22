@@ -52,24 +52,26 @@ Based on the rules in the system prompt, output the cleaned and transitioned ver
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response1 = self.llm.agen(message)
+        response1 = self.llm.gen(message)
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["response"] = response1
 
         previous_progress = self.report.progress
         system_prompt, user_prompt = self._progress_prompt(previous_progress, response1)
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response2 = self.llm.agen(message)
+        response2 = self.llm.gen(message)
 
         new_sources = self.source_buffer.flush()
         self.report.append(response1, response2, new_sources)
+        if execution_trace:
+            execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
         return response1
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
         execution_trace = kwargs.get("execution_trace", None)
-
+        
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
@@ -83,7 +85,10 @@ Based on the rules in the system prompt, output the cleaned and transitioned ver
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         response2 = await self.llm.agen(message)
 
-        self.report.append(response1, response2)
+        new_sources = self.source_buffer.flush()
+        self.report.append(response1, response2, new_sources)
+        if execution_trace:
+            execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
         return response1
     
     def _progress_prompt(self, previous_progress: str, addition: str) -> str:
