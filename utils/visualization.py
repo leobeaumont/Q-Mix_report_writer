@@ -1,10 +1,11 @@
 import math
 from utils.globals import ExecutionTrace
 from bokeh.plotting import figure, show
-from bokeh.models import ColumnDataSource, HoverTool, CustomJS, Slider, Arrow, VeeHead
-from bokeh.layouts import column
+from bokeh.models import ColumnDataSource, HoverTool, CustomJS, Slider, Arrow, VeeHead, Div
+from bokeh.layouts import column, row
 from bokeh.io import output_file
 from typing import List
+import markdown
 
 class StandaloneVisualizer:
     def __init__(self, trace, radius=200):
@@ -30,21 +31,75 @@ class StandaloneVisualizer:
         self.node_source = ColumnDataSource(data=node_data)
         self.edge_source = ColumnDataSource(data=edge_data)
         
-        # 2. Store ALL steps with round and execution info
+        # 2. Create the Info Panel (The right-hand side text display)
+        self.info_panel = Div(
+            text="<div style='font-family: sans-serif;'><h1>Step Details</h1><p>Move the slider to see agent interactions.</p></div>",
+            width=450,
+            styles={
+                "background-color": "#fdfdfd",
+                "padding": "20px",
+                "border-left": "2px solid #eee",
+                "height": "600px",
+                "overflow-y": "auto",
+                "box-shadow": "-2px 0 5px rgba(0,0,0,0.05)"
+            }
+        )
+
+        # 3. Store ALL steps with round, execution info, and Dynamic HTML
         all_steps_data = {}
         for global_idx, (r_idx, num_executed) in enumerate(self.global_steps):
             n, e, rid = self._get_step_data(r_idx, num_executed)
+            
+            # Generate HTML description for this step
+            current_round_data = self.trace[r_idx]
+            exec_order = current_round_data.get("exec_order", [])
+            active_agent = exec_order[num_executed - 1] if num_executed > 0 else "None (Start of Round)"
+            
+            step_html = f"""
+                <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #34495e;">
+                    <h2 style="margin-top: 0; color: #2c3e50; border-bottom: 2px solid #f1c40f; padding-bottom: 10px;">
+                        Round {r_idx} <small style="color: #bdc3c7; font-weight: normal;">(Step {global_idx})</small>
+                    </h2>
+                    <p><b>Current Status:</b> 
+                        <span style="background: #f1c40f; padding: 2px 6px; border-radius: 4px; color: #fff;">
+                            { 'Processing' if num_executed > 0 else 'Initial State' }
+                        </span>
+                    </p>
+                    <p style="font-size: 1.1em;"><b>Active Agent:</b> <code style="color: #e67e22;">{active_agent}</code></p>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+            """
+            
+            if num_executed > 0 and active_agent in current_round_data:
+                agent_info = current_round_data[active_agent]
+                prompt_md = agent_info.get('prompt', 'N/A')
+                response_md = agent_info.get('response', 'N/A')
+                prompt_html = markdown.markdown(prompt_md, extensions=['fenced_code', 'tables']) if prompt_md is not None else None
+                response_html = markdown.markdown(response_md, extensions=['fenced_code', 'tables']) if response_md is not None else None
+                step_html += f"""
+                    <h3 style="color: #2980b9;">Agent Logic</h3>
+                    <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 10px;">
+                        <p><b>Prompt:</b><br><small style="color: #7f8c8d;">{prompt_html}</small></p>
+                    </div>
+                    <div style="background: #fdf9ea; padding: 10px; border-radius: 5px; border-left: 4px solid #f1c40f;">
+                        <p><b>Response:</b><br><small style="color: #7f8c8d;">{response_html}</small></p>
+                    </div>
+                """
+            
+            step_html += "</div>"
+
             all_steps_data[str(global_idx)] = {
                 'nodes': n, 
                 'edges': e, 
                 'round_id': rid,
-                'num_executed': num_executed  # Needed for snapping logic
+                'num_executed': num_executed,
+                'step_text': step_html
             }
 
         self.plot = figure(
             title="Agent Communication Trace",
             x_range=(-radius-50, radius+50), y_range=(-radius-50, radius+50),
-            tools="pan,wheel_zoom,reset,save", toolbar_location="above", match_aspect=True
+            tools="pan,wheel_zoom,reset,save", toolbar_location="above", match_aspect=True,
+            width=600, height=700,
         )
         self.plot.axis.visible = False
         self.plot.grid.grid_line_color = None
@@ -63,16 +118,17 @@ class StandaloneVisualizer:
 
         self.plot.add_tools(HoverTool(renderers=[node_renderer], tooltips=[
             ("Agent", "@agent_id"),
-            ("Prompt", "@prompt"),
-            ("Response", "@response")
         ]))
 
-        # Modified CustomJS to use atomic data updates and snapping
-        callback = CustomJS(args=dict(n_src=self.node_source, e_src=self.edge_source, all_data=all_steps_data), code="""
+        # Updated CustomJS to handle the side-panel text update
+        callback = CustomJS(args=dict(n_src=self.node_source, e_src=self.edge_source, info=self.info_panel, all_data=all_steps_data), code="""
             const step = Math.round(cb_obj.value).toString();
             const targetData = all_data[step];
             
-            // Detect transitions
+            // 1. Update the Right Panel Text Immediately
+            info.text = targetData['step_text'];
+            
+            // 2. Animation & Graph Update Logic
             if (window.currentRound === undefined) window.currentRound = 0;
             const roundChanged = window.currentRound !== targetData['round_id'];
             window.currentRound = targetData['round_id'];
@@ -81,8 +137,6 @@ class StandaloneVisualizer:
                 cancelAnimationFrame(window.bokehAnimationID);
             }
 
-            // LOGIC FIX: If going to Step 0 or changing rounds, snap immediately and EXIT.
-            // This prevents "Grey Ghost Edges" from being drawn during the coordinate shift.
             if (targetData['num_executed'] === 0 || roundChanged || 
                 e_src.data['alpha'].length !== targetData['edges']['alpha'].length) {
                 
@@ -93,17 +147,14 @@ class StandaloneVisualizer:
                 return; 
             }
 
-            const duration = 800; // Smoother duration
+            const duration = 600;
             const startTime = performance.now();
             
-            // Capture starting state for interpolation
             const startNodeAlpha = [...n_src.data['alpha']];
             const startEdgeAlpha = [...e_src.data['alpha']];
             const targetNodeAlpha = targetData['nodes']['alpha'];
             const targetEdgeAlpha = targetData['edges']['alpha'];
 
-            // Sync structural properties (colors, widths, coords) BEFORE animation starts
-            // But keep the current alpha to avoid the flash.
             const intermediateEdges = Object.assign({}, targetData['edges']);
             intermediateEdges['alpha'] = startEdgeAlpha;
             e_src.data = intermediateEdges;
@@ -116,7 +167,6 @@ class StandaloneVisualizer:
                 const elapsed = currentTime - startTime;
                 const progress = Math.min(elapsed / duration, 1);
 
-                // Update Alpha values only
                 const currentNAlpha = n_src.data['alpha'];
                 for (let i = 0; i < startNodeAlpha.length; i++) {
                     currentNAlpha[i] = startNodeAlpha[i] + (targetNodeAlpha[i] - startNodeAlpha[i]) * progress;
@@ -137,7 +187,7 @@ class StandaloneVisualizer:
             window.bokehAnimationID = requestAnimationFrame(animate);
         """)
 
-        self.slider = Slider(start=0, end=len(self.global_steps) - 1, value=0, step=1, title="Execution Step")
+        self.slider = Slider(start=0, end=len(self.global_steps) - 1, value=0, step=1, title="Execution Step", sizing_mode="stretch_width")
         self.slider.js_on_change('value', callback)
 
     def _calculate_coords(self, agent_names: List[str]):
@@ -195,7 +245,6 @@ class StandaloneVisualizer:
                         e_data["color"].append("#888888")
                         e_data["width"].append(1.5)
 
-                    # Logic: Only show edges if the agent has started its turn
                     is_visible = agent_key in all_executed_indices
                     e_data["alpha"].append(0.8 if is_visible else 0.0)
         
@@ -203,7 +252,13 @@ class StandaloneVisualizer:
 
     def show(self):
         output_file("agent_trace.html")
-        show(column(self.slider, self.plot))
+        # Layout: Slider on top, Plot and Info side-by-side
+        final_layout = column(
+            self.slider, 
+            row(self.plot, self.info_panel, sizing_mode="stretch_both"),
+            sizing_mode="stretch_both"
+        )
+        show(final_layout)
 
 # --- EXECUTION ---
 trace = ExecutionTrace.instance().load_trace()
