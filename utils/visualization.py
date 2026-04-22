@@ -55,14 +55,40 @@ class StandaloneVisualizer:
             exec_order = current_round_data.get("exec_order", [])
             active_agent = exec_order[num_executed - 1] if num_executed > 0 else "None (Start of Round)"
             
+
+            action_val = None
+            if num_executed > 0 and active_agent in current_round_data:
+                action_val = current_round_data[active_agent].get('action', None)
+
+            action_names = [
+            "Solo process",  # 0
+            "Broadcast",  #1
+            "Selective query to LeadArchitect",  #2
+            "Selective query to Researcher",  # 3
+            "Selective query to DataAnalyst",  # 4
+            "Selective query to TechnicalWriter",  # 5
+            "Selective query to Reviewer",  # 6 
+            "Aggregate",  # 7
+            "Execute verify",  # 8
+            "Debate with LeadArchitect",  # 9
+            "Debate with Researcher",  # 10
+            "Debate with DataAnalyst",  # 11
+            "Debate with TechnicalWriter",  # 12
+            "Debate with Reviewer",  # 13
+            "Append",  # 14
+            "Terminate"  # 15
+            ]
+
+            action_name = action_names[action_val] if action_val is not None else "None"
+
             step_html = f"""
                 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #34495e;">
                     <h2 style="margin-top: 0; color: #2c3e50; border-bottom: 2px solid #f1c40f; padding-bottom: 10px;">
                         Round {r_idx} <small style="color: #bdc3c7; font-weight: normal;">(Step {global_idx})</small>
                     </h2>
-                    <p><b>Current Status:</b> 
-                        <span style="background: #f1c40f; padding: 2px 6px; border-radius: 4px; color: #fff;">
-                            { 'Processing' if num_executed > 0 else 'Initial State' }
+                    <p><b>Agent Action:</b> 
+                        <span style="background: #2c3e50; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: bold; font-family: monospace;">
+                            { action_name }
                         </span>
                     </p>
                     <p style="font-size: 1.1em;"><b>Active Agent:</b> <code style="color: #e67e22;">{active_agent}</code></p>
@@ -71,17 +97,21 @@ class StandaloneVisualizer:
             
             if num_executed > 0 and active_agent in current_round_data:
                 agent_info = current_round_data[active_agent]
-                prompt_md = agent_info.get('prompt', 'N/A')
-                response_md = agent_info.get('response', 'N/A')
-                prompt_html = markdown.markdown(prompt_md, extensions=['fenced_code', 'tables']) if prompt_md is not None else None
-                response_html = markdown.markdown(response_md, extensions=['fenced_code', 'tables']) if response_md is not None else None
+                
+                # Defensive check: use 'or' to handle None values safely
+                prompt_md = agent_info.get('prompt') or 'N/A'
+                response_md = agent_info.get('response') or 'N/A'
+                
+                prompt_html = markdown.markdown(prompt_md, extensions=['fenced_code', 'tables'])
+                response_html = markdown.markdown(response_md, extensions=['fenced_code', 'tables'])
+                
                 step_html += f"""
                     <h3 style="color: #2980b9;">Agent Logic</h3>
                     <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 10px;">
-                        <p><b>Prompt:</b><br><small style="color: #7f8c8d;">{prompt_html}</small></p>
+                        <p><b>Prompt:</b><br><div style="color: #7f8c8d; font-size: 0.9em;">{prompt_html}</div></p>
                     </div>
                     <div style="background: #fdf9ea; padding: 10px; border-radius: 5px; border-left: 4px solid #f1c40f;">
-                        <p><b>Response:</b><br><small style="color: #7f8c8d;">{response_html}</small></p>
+                        <p><b>Response:</b><br><div style="color: #7f8c8d; font-size: 0.9em;">{response_html}</div></p>
                     </div>
                 """
             
