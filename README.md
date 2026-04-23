@@ -161,8 +161,20 @@ Technical changes:
 
 ### Adding animated graph visualization
 
-WRITE TEXT ON GRAPH VISU HERE
+The advantage of preserving the graph structure of the original code of Agent-Q-Mix is that representing the evolution of the graph creates a very visual and accessible debug tool. The tool is programmed to track the full execution trace of the redaction process. And then plot the communication graph of the agents and its evolution round after round. 
 
 Technical changes:
-- Implemented a full `ExecutionTrace` singleton. Every action is tracked with intra-round order and context.
-- When the graph is initiated with `execution_trace = True`, the whole process trace is stored inside the `ExecutionTrace` object.
+- Implemented a full `ExecutionTrace` singleton. Every action is tracked with intra-round order and context. This includes for every round:
+    - execution order of the agents
+    - for each agent:
+        - selected action
+        - list of the agents that will receive its message
+        - prompt
+        - response
+    - the current state of the report
+- When the graph is initiated with `execution_trace = True`, the whole process trace is stored inside the `ExecutionTrace` object. At the end of the execution, the `ExecutionTrace` is stored inside of a `json` file (default name: `execution_trace.json`).
+- Creation of a visualizer tool inside of `utils/visualization.py`. The visualizer creates a full interactive animation from the `ExecutionTrace` `json` file. The animation is a simple `html` file (default name: `agent_trace.html`) that can be openned on any browser and contains all the data/logic of the visualization.
+- The animation shows the evolution of communications during every step of every round of the process. Displaying the informations of the `ExecutionTrace` in a human friendly interface. The goal of the interface is to debug the redaction process and find the errors in a timely manner.
+- On the graph each agent is represented by a `Node`. The communication are represented by `Edges`.
+- The `timeline` of the exectuion is represented by a `slide bar`, and the active agent and communications at a specific execution step are highlighted for clarity. The information on the active agent is displayed to the right of the graph, alongside the state of the report at that current step.
+- The `play` button lets the user observ the graph evolution by going through steps automatically at a rapid pace.  
