@@ -56,7 +56,6 @@ class StandaloneVisualizer:
             }
         )
 
-        # NEW: The Report Panel
         self.report_panel = Div(
             text="<div style='font-family: sans-serif;'><h1>Current Report</h1><p>Waiting for Collector...</p></div>",
             width=440,
@@ -85,15 +84,13 @@ class StandaloneVisualizer:
             # Identify which agent is currently active/selected
             active_agent = last_agent_to_act if last_agent_to_act else "None (Start of Round)"
             
-            # --- UPDATED REPORT LOGIC ---
-            # Only update the stored report text IF the Collector was the one who just finished acting
+            # Update the stored report text when Collector is active
             if last_agent_to_act == "Collector":
                 collector_data = current_round_data.get("Collector", {})
                 report_md = collector_data.get("report_state")
                 if report_md:
                     latest_report_html = markdown.markdown(report_md, extensions=['fenced_code', 'tables'])
 
-            # Wrap the report in a "bubble" style matching your other panels
             report_bubble_html = f"""
                 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
                     <h2 style="color: #2c3e50; border-bottom: 2px solid #2ecc71; padding-bottom: 10px;">Current Report State</h2>
@@ -158,7 +155,7 @@ class StandaloneVisualizer:
                 'round_id': rid,
                 'num_executed': num_executed,
                 'step_text': step_html,
-                'report_text': report_bubble_html # Using the bubble variable here
+                'report_text': report_bubble_html
             }
 
         self.plot = figure(
@@ -193,12 +190,11 @@ class StandaloneVisualizer:
             ("Role", "@agent_id"),
         ]))
 
-        # Updated CustomJS to include the report panel
         callback = CustomJS(args=dict(
             n_src=self.node_source, 
             e_src=self.edge_source, 
             info=self.info_panel, 
-            report=self.report_panel, # Pass new panel
+            report=self.report_panel,
             all_data=all_steps_data
         ), code="""
             const step = Math.round(cb_obj.value).toString();
@@ -266,17 +262,15 @@ class StandaloneVisualizer:
             window.bokehAnimationID = requestAnimationFrame(animate);
         """)
 
-        # 1. Update Slider to be narrower
+        # Controls
         self.slider = Slider(start=0, end=len(self.global_steps) - 1, value=0, step=1,
                              width=1000, show_value=False, bar_color="#00000062")
         self.slider.js_on_change('value', callback)
 
-        # 2. Define Control Buttons
         self.prev_btn = Button(label="◀ Previous", width=80, button_type="primary")
         self.next_btn = Button(label="Next ▶", width=80, button_type="primary")
         self.play_btn = Button(label="► Play", width=80, button_type="success")
 
-        # 3. Add Button Logic via CustomJS
         self.prev_btn.js_on_click(CustomJS(args=dict(s=self.slider), code="""
             if (s.value > s.start) s.value -= 1;
         """))
@@ -410,7 +404,7 @@ class StandaloneVisualizer:
 
         final_layout = column(
             self.style_fix,
-            controls, # Use the new controls row instead of just self.slider
+            controls,
             row(self.plot, self.info_panel, self.report_panel, sizing_mode="stretch_height"),
             sizing_mode="stretch_both"
         )
