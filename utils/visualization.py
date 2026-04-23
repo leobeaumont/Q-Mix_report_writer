@@ -6,6 +6,8 @@ from bokeh.layouts import column, row
 from bokeh.io import output_file
 from typing import List
 import markdown
+import base64
+from pathlib import Path
 
 class StandaloneVisualizer:
     def __init__(self, trace, radius=200):
@@ -177,11 +179,18 @@ class StandaloneVisualizer:
                        line_color='color', line_alpha='alpha', line_width='width')
         
         self.plot.add_layout(arrows)
-        node_renderer = self.plot.circle(x="x", y="y", radius=20, fill_color="color", 
+        node_renderer = self.plot.circle(x="x", y="y", radius=30, fill_color="color", 
                                          source=self.node_source, fill_alpha='alpha', line_alpha='alpha')
+        
+        self.plot.image_url(
+            url="url", x="x", y="y", 
+            w=42, h=42,
+            anchor="center", source=self.node_source,
+            global_alpha='alpha'
+        )
 
         self.plot.add_tools(HoverTool(renderers=[node_renderer], tooltips=[
-            ("Agent", "@agent_id"),
+            ("Role", "@agent_id"),
         ]))
 
         # Updated CustomJS to include the report panel
@@ -311,9 +320,19 @@ class StandaloneVisualizer:
         finished_indices = set(exec_order[:num_executed - 1]) if num_executed > 0 else set()
         all_executed_indices = set(exec_order[:num_executed])
         
-        n_data = {"x": [], "y": [], "agent_id": [], "prompt": [], "response": [], "color": [], "alpha": []}
+        n_data = {"x": [], "y": [], "agent_id": [], "prompt": [], "response": [], "color": [], "alpha": [], "url": []}
         e_data = {"x_start": [], "y_start": [], "x_end": [], "y_end": [], "color": [], "width": [], "alpha": []}
-        offset = 22 
+        offset = 30
+
+        local_logos = {
+            "RAG": "assets/DB.png",
+            "LeadArchitect": "assets/compass.png",
+            "TechnicalWriter": "assets/quill.png",
+            "Researcher": "assets/magnifier.png",
+            "DataAnalyst": "assets/graph.png",
+            "Reviewer": "assets/validation.png",
+            "Collector": "assets/hoop.png"
+        }
 
         for i in range(self.n_agents):
             agent_key = self.agent_names[i]
@@ -356,8 +375,25 @@ class StandaloneVisualizer:
 
                     is_visible = agent_key in all_executed_indices
                     e_data["alpha"].append(0.8 if is_visible else 0.0)
+
+            # Encode the local file into a string
+            file_path = local_logos.get(agent_key, "assets/DB.png")
+            image_data = self.get_base64_image(file_path)
+    
+            n_data["url"].append(image_data)
         
         return n_data, e_data, round_idx
+
+    def get_base64_image(self, image_path):
+        """Converts a local image to a Base64 data URI."""
+        try:
+            with open(image_path, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode()
+                # Determine extension for the mime type
+                ext = Path(image_path).suffix.replace(".", "")
+                return f"data:image/{ext};base64,{encoded_string}"
+        except FileNotFoundError:
+            return "" # Fallback or default icon
     
     def show(self):
         output_file("agent_trace.html")
