@@ -60,7 +60,7 @@ class Researcher(Node):
             if execution_trace:
                 execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             for i, document in enumerate(documents):
-                citation = f"<source> {document["source"]} </source>\n<content>\n{document["content"]}\n</content>"
+                citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
                 spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
                 SourceBuffer.instance().add(document)
         
@@ -93,7 +93,7 @@ class Researcher(Node):
             if execution_trace:
                 execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             for i, document in enumerate(documents):
-                citation = f"<source> {document["source"]} </source>\n<content>\n{document["content"]}\n</content>"
+                citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
                 spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
                 SourceBuffer.instance().add(document)
         
