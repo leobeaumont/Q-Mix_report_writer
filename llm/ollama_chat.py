@@ -78,8 +78,8 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 4096, 
 # Register your locally available Ollama models here.
 # The name must match exactly what you have pulled in Ollama (run `ollama list` to check).
 @LLMRegistry.register("tinyllama")
-@LLMRegistry.register("llama3.2")
-@LLMRegistry.register("phi3.5")
+@LLMRegistry.register("qwen3:8b")
+@LLMRegistry.register("qwen3:4b")
 class OllamaChat(LLM):
     def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024, response_schema: Optional[Dict] = None):
         self.model_name = model_name

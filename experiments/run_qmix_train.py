@@ -259,7 +259,7 @@ async def train(args):
 def main():
     parser = argparse.ArgumentParser(description="QMIX Training for Multi-Agent Topology Optimization")
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--llm_name", type=str, default="tinyllama")
+    parser.add_argument("--llm_name", type=str, default="qwen3:8b")
     parser.add_argument("--num_episodes", type=int, default=500)
     parser.add_argument("--max_rounds", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
