@@ -1,9 +1,33 @@
 import numpy as np
 import json
+import re
 
 from utils.globals import ReportState, Score
 from utils.config import get_llm
 from prompt.prompt_set_registry import PromptSetRegistry
+
+def safe_json_parse(text):
+    """Clean markdown and attempt to fix truncated JSON."""
+    if not text:
+        return {}
+    
+    # 1. Strip Markdown code blocks if they exist
+    text = re.sub(r"```json\s*|\s*```", "", text).strip()
+    
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # 2. Attempt to close an unterminated string/object
+        if text.count('"') % 2 != 0:
+            text += '"'
+        if not text.endswith("}"):
+            text += "}"
+        
+        try:
+            return json.loads(text)
+        except:
+            print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
+            return {}
 
 def length_score(target, sigma) -> float:
     """Score the length of the production between 0 and 1."""
@@ -29,7 +53,7 @@ async def report_score() -> float:
         ]
 
     response = await llm.agen(message, response_schema=schema)
-    macro_scores = json.loads(response)
+    macro_scores = safe_json_parse(response)
 
     coverage_score = macro_scores.get("subject_coverage", 0)
     flow_score = macro_scores.get("global_flow", 0)
@@ -60,7 +84,7 @@ async def report_score() -> float:
         ]
     
     response = await llm.agen(message, response_schema=schema)
-    micro_scores = json.loads(response)
+    micro_scores = safe_json_parse(response)
 
     logic_score = micro_scores.get("logical_soundness", 0)
     verifiability_score = micro_scores.get("verifiability_score", 0)
