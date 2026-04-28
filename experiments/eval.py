@@ -61,7 +61,8 @@ async def report_score() -> float:
     tone_score = macro_scores.get("tone_consistency", 0)
     redundancy_score = macro_scores.get("redundancy_penalty", 0)
 
-    global_notes = macro_scores.get("global_reasoning", "[NO GLOBAL ANALYSIS]")
+    # Truncate notes to avoid token explosions
+    global_notes = macro_scores.get("global_reasoning", "[NO GLOBAL ANALYSIS]")[:800]
 
     # Micro scoring
 
@@ -72,7 +73,9 @@ async def report_score() -> float:
     user_prompt = "<document summary>\n" + ReportState.instance().progress + "\n<document summary>\n"
     user_prompt += "<global notes>\n" + global_notes + "\n</global notes>\n"
     user_prompt += "<audit history>\n"
-    for i, notes in enumerate(score_memory.micro_notes):
+    # Only take the last 3 notes to keep the prompt size stable
+    history_window = score_memory.micro_notes[-3:]
+    for i, notes in enumerate(history_window):
         user_prompt += f"<chunk {i} notes>\n" + notes + f"\n</chunk {i} notes>\n"
     user_prompt += "</audit history>\n<current chunk>\n" + ReportState.instance().additions[-1] + "\n</current chunk>\n"
 
@@ -93,7 +96,8 @@ async def report_score() -> float:
 
     hallucination_flag = micro_scores.get("hallucination_flag", False)
 
-    micro_analysis = micro_scores.get("local_audit_notes", "[NO LOCAL ANALYSIS]")
+    # Truncate note to avoid token explosion
+    micro_analysis = micro_scores.get("local_audit_notes", "[NO LOCAL ANALYSIS]")[:500]
 
     # Calculations
 

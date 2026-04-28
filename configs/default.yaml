@@ -31,7 +31,7 @@ evaluation:
   num_rounds: 2
 
 llm:
-  default_model: qwen3:4b
+  default_model: qwen3:8b
   temperature: 0.2
   max_tokens: 4096
   ollama_base_url: http://localhost:11434

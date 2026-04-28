@@ -62,7 +62,7 @@ class RAGManager:
         metadatas should be a list of dicts, e.g., 
         [{'source_name': 'Annual_Report.pdf', 'page_number': 12}, ...]
         """
-        self.collection.add(
+        self.collection.upsert(
             documents=documents,
             metadatas=metadatas,
             ids=ids

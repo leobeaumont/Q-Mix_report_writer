@@ -23,6 +23,7 @@ import numpy as np
 import torch
 import asyncio
 from tqdm import tqdm
+import time
 from typing import Any, List, Optional, Dict, Tuple
 
 from graph.node import Node
@@ -236,7 +237,8 @@ class QMIXGraph:
                 round_template = {f"{self.agent_names[i]}": {"action": action,
                                                              "message_to": [],
                                                              "prompt": None,
-                                                             "response": None} for i, action in enumerate(actions.tolist() + [None])}
+                                                             "response": None,
+                                                             "time": None} for i, action in enumerate(actions.tolist() + [None])}
                 round_template["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None}
                 round_template["Collector"]["report_state"] = ReportState.instance().content
                 round_template["exec_order"] = []
@@ -247,10 +249,10 @@ class QMIXGraph:
             elif self._fixed_adj is not None:
                 self.apply_topology(self._fixed_adj)
 
-            if round_idx > 0:
-                self._connect_temporal(round_idx)
+            self._connect_temporal()
 
             await self._execute_round(input, max_tries, max_time, actions=actions)
+
             self._update_memory()
 
             round_idx += 1
@@ -295,6 +297,7 @@ class QMIXGraph:
             node_index = self.node_ids.index(current_id)
             node_action = kwargs.get("actions", [None] * (node_index + 1))[node_index] if node_index != 5 else None
 
+            t1 = time.time()
             for attempt in range(max_tries):
                 try:
                     await asyncio.wait_for(
@@ -303,11 +306,13 @@ class QMIXGraph:
                     )
                     executed_this_round.add(current_id)
                     if self.execution_trace:
+                        t2 = time.time()
                         self.execution_trace.trace[-1]["exec_order"].append(self.agent_names[node_index])
+                        self.execution_trace.trace[-1][self.agent_names[node_index]]["time"] = round(t2 - t1)
                     agents_pbar.update()
                     break
                 except Exception as e:
-                    logger.warning(f"Node {current_id} attempt {attempt + 1} failed: {e}")
+                    print(f"Node {current_id} attempt {attempt + 1} failed: {e}")
 
             for successor in self.nodes[current_id].spatial_successors:
                 if successor.id not in self.nodes.keys():
@@ -328,11 +333,9 @@ class QMIXGraph:
             node.temporal_predecessors = []
             node.temporal_successors = []
 
-    def _connect_temporal(self, round_idx):
+    def _connect_temporal(self):
         """Connect temporal edges (self-connections from previous round)."""
         self._clear_temporal()
-        if round_idx == 0:
-            return
         for nid, node in self.nodes.items():
             if node.last_memory["outputs"]:
                 node.add_predecessor(node, "temporal")

@@ -46,7 +46,7 @@ class Researcher(Node):
 
         # Tool use
         action = kwargs.get("action", None)
-        if action == 8:  # when using execute_verify
+        if True: #action == 8:  # when using execute_verify
             system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
             _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
             if execution_trace:
@@ -79,11 +79,10 @@ class Researcher(Node):
 
         # Tool use
         action = kwargs.get("action", None)
-        if action == 8:  # when using execute_verify
+        if True: # action == 8:  # when using execute_verify
             system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
             _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
             if execution_trace:
-                execution_trace.trace[-1]["RAG"]["prompt"] = system_prompt + user_prompt
                 execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
                 execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
                 execution_trace.trace[-1]["exec_order"].append("RAG")
@@ -91,6 +90,7 @@ class Researcher(Node):
             query = await self.llm.agen(message)
             documents = self.rag.query_docs(query)
             if execution_trace:
+                execution_trace.trace[-1]["RAG"]["prompt"] = query
                 execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             for i, document in enumerate(documents):
                 citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"

@@ -101,8 +101,14 @@ class StandaloneVisualizer:
             """
 
             action_val = None
+            time = None
             if num_executed > 0 and last_agent_to_act in current_round_data:
                 action_val = current_round_data[last_agent_to_act].get('action', None)
+                time = current_round_data[last_agent_to_act].get('time', None)
+
+            if time is None:
+                time = "N/A"
+
 
             action_names = [
                 "Solo process", "Broadcast", "Selective query to LeadArchitect", 
@@ -118,7 +124,7 @@ class StandaloneVisualizer:
             step_html = f"""
                 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #34495e;">
                     <h2 style="margin-top: 0; color: #2c3e50; border-bottom: 2px solid #f1c40f; padding-bottom: 10px;">
-                        Round {r_idx} <small style="color: #bdc3c7; font-weight: normal;">(Step {global_idx})</small>
+                        Round {r_idx} <small style="color: #bdc3c7; font-weight: normal;">(Step {global_idx}: {time}s)</small>
                     </h2>
                     <p style="font-size: 1.1em;"><b>Agent Action:</b> 
                         <span style="background: #b08f0c; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: bold; font-family: monospace;">
@@ -314,7 +320,7 @@ class StandaloneVisualizer:
         finished_indices = set(exec_order[:num_executed - 1]) if num_executed > 0 else set()
         all_executed_indices = set(exec_order[:num_executed])
         
-        n_data = {"x": [], "y": [], "agent_id": [], "prompt": [], "response": [], "color": [], "alpha": [], "url": []}
+        n_data = {"x": [], "y": [], "agent_id": [], "prompt": [], "response": [], "time": [], "color": [], "alpha": [], "url": []}
         e_data = {"x_start": [], "y_start": [], "x_end": [], "y_end": [], "color": [], "width": [], "alpha": []}
         offset = 30
 
@@ -337,6 +343,7 @@ class StandaloneVisualizer:
             n_data["agent_id"].append(agent_key)
             n_data["prompt"].append(info.get("prompt", "N/A"))
             n_data["response"].append(info.get("response", "N/A"))
+            n_data["time"].append(info.get("time", "N/A"))
             
             if agent_key == active_agent:
                 n_data["color"].append("#f1c40f") # Gold
