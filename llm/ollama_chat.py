@@ -53,18 +53,6 @@ async def achat_ollama(model_name: str, messages: list, max_tokens: int = 4096, 
 
     custom_timeout = aiohttp.ClientTimeout(total=600, connect=60, sock_read=600)
 
-    # TO REMOVE
-    import json
-    import time
-    approx_tokens = len(json.dumps(data)) / 4 
-
-    if approx_tokens > 3000:  # Adjust this threshold based on your "normal" prompt size
-        log_file = f"oversized_prompt_{int(time.time())}.json"
-        with open(log_file, "w") as f:
-            json.dump(data, f, indent=2)
-        print(f"⚠️ OVERSIZED PROMPT DETECTED ({approx_tokens} tokens). Saved to {log_file}")
-    # END OF TO REMOVE
-
     async with aiohttp.ClientSession(timeout=custom_timeout) as session:
         async with session.post(endpoint, headers=headers, json=data) as response:
             if "application/json" not in (response.headers.get("Content-Type") or ""):

@@ -1,5 +1,4 @@
 tasks = [
-    "Generate a report on the chemistry of the alpha protocol."
     "Generate a report on the current state of Solid-State Battery technology.",
     "Generate a report on the efficacy of CRISPR-Cas9 in treating hereditary blindness.",
     "Generate a report on the environmental impact of Deep-Sea Mining for rare earth minerals.",

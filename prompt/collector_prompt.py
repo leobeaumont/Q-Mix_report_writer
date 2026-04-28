@@ -49,9 +49,8 @@ You have to write a new summary that describes the progress of the report.
 
 # RULES
 1) Synthesize previous elements with the new addition to maintain a cohesive, high-level overview.
-2) The new summary must describe accurately what is said in the new addition to the report.
-3) Don't waste words, you need to give the most information about the report state with as few words as possible.
-4) Only answer the new summary and nothing else.
+2) Don't waste words, you need to give the most information about the report state with as few words as possible.
+3) Only answer the new summary and nothing else.
 """
         return summarize
 

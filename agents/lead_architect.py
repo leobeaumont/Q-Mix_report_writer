@@ -27,9 +27,9 @@ class LeadArchitect(Node):
         for id, info in temporal_info.items():
             temporal_str += f"Agent {id} ({info['role']}) previously:\n{info['output']}\n\n"
 
-        user_prompt = f"Task: {raw_inputs['task']}\n"
+        user_prompt = f"\n\nTask: {raw_inputs['task']}\n"
 
-        user_prompt += f"\nCurrent report state: {ReportState.instance().progress}\n"
+        user_prompt += f"Current report state: {ReportState.instance().progress}\n\n"
 
         if spatial_str:
             user_prompt += f"\nOther agent's current responses:\n{spatial_str}"
