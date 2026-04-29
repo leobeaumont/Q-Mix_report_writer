@@ -12,35 +12,27 @@ class Collector(Node):
     def __init__(self, id=None, role=None, llm_name=""):
         super().__init__(id, "Collector", llm_name)
         self.llm = get_llm(llm_name)
-        self.prompt_set = PromptSetRegistry.get("collector")
+        self.prompt_set = PromptSetRegistry.get("redacting")
         self.role = role or "Collector"
         self.report = ReportState.instance()
         self.source_buffer = SourceBuffer.instance()
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs): 
-        system_prompt = self.prompt_set.get_role() 
-        system_prompt += self.prompt_set.get_description(self.role) 
+        system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
 
-        previous_paragraph = self.report.get_last()
-        if spatial_info:
-            _, current_text = spatial_info.popitem()
-        else:
-            current_text = "[NO CURRENT TEXT]"
+        spatial_str = ""
+        for id, info in spatial_info.items():
+            spatial_str += f"#### Message from {info['role']}:\n{info['output']}\n\n"
 
-        user_prompt = f"""
-# INPUT DATA
-<previous_paragraph>
-{previous_paragraph}
-</previous_paragraph>
+        user_prompt = f"\n\n### Task:\n{raw_inputs['task']}\n"
 
-<current_text>
-{current_text}
-</current_text>
+        user_prompt += f"\n### Previous Text Production:\n{ReportState.instance().get_last()}\n"
 
-# INSTRUCTION
-Based on the rules in the system prompt, output the cleaned and transitioned version of the <current_text> below.
-"""
+        if spatial_str:
+            user_prompt += f"\n### Received messages:\n\n{spatial_str}"
+        user_prompt += "### [WRITE OUTPUT HERE]"
+
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
@@ -92,21 +84,13 @@ Based on the rules in the system prompt, output the cleaned and transitioned ver
         return response1
     
     def _progress_prompt(self, previous_progress: str, addition: str) -> str:
-        task = self.prompt_set.get_summarize()
+        system_prompt = self.prompt_set.get_description("Summarizer")
 
-        context = f"""
-# INPUT DATA
-<report state>
-{previous_progress}
-</report state>
+        user_prompt = f"\n\n### Previous summary:\n{previous_progress}\n"
+        user_prompt += f"\n### New addition:\n{addition}\n"
+        user_prompt += "### [WRITE NEW SUMMARY HERE]"
 
-<addition>
-{addition}
-</addition>
-
-[WRITE NEW SUMMARY HERE]
-"""
-        return task, context
+        return system_prompt, user_prompt
     
 if __name__ == "__main__":
     spatial = {"key": "This is the current text"}
