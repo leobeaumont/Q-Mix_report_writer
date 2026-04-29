@@ -25,19 +25,19 @@ class Researcher(Node):
         spatial_str = ""
         temporal_str = ""
         for id, info in spatial_info.items():
-            spatial_str += f"Agent {id} ({info['role']}):\n{info['output']}\n\n"
+            spatial_str += f"#### Message from {info['role']}:\n{info['output']}\n\n"
         for id, info in temporal_info.items():
-            temporal_str += f"Agent {id} ({info['role']}) previously:\n{info['output']}\n\n"
+            temporal_str += f"#### Previous output from {info['role']}:\n{info['output']}\n\n"
 
-        user_prompt = f"\n\nTask: {raw_inputs['task']}\n"
+        user_prompt = f"\n\n### Task:\n{raw_inputs['task']}\n"
 
-        user_prompt += f"Current report state: {ReportState.instance().progress}\n\n"
+        user_prompt += f"\n### Current report state:\n{ReportState.instance().progress}\n"
 
         if spatial_str:
-            user_prompt += f"\nOther agent's current responses:\n{spatial_str}"
+            user_prompt += f"\n### Received messages:\n\n{spatial_str}"
         if temporal_str:
-            user_prompt += f"\nPrevious round:\n{temporal_str}"
-        user_prompt += "\nThink step by step and provide your answer."
+            user_prompt += f"### Your previous output:\n\n{temporal_str}"
+        user_prompt += "### [WRITE OUTPUT HERE]"
 
         return system_prompt, user_prompt
 
