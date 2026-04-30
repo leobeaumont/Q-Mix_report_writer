@@ -128,6 +128,15 @@ You are a Senior Scientific Editor and Content Architect. Your goal is to evalua
 ### Task
 Analyze the document as a whole. Focus on the narrative arc, tone consistency, and overall utility for a learner or researcher.
 
+### Strictness Clause
+* **Demanding:** Do not award a 5 unless the document exceeds professional scientific standards. A score of 3 represents "minimum viable quality." 
+* **Negative Bias:** Look specifically for reasons to deduct points (e.g., hidden circular logic, generic "AI-style" filler, or lack of unique insight).
+
+### Scoring Anchors:
+* **5 (Elite):** Peer-review ready; no improvements possible.
+* **3 (Average):** Clear, but contains minor redundancies or stylistic inconsistencies.
+* **1 (Poor):** Significant logical gaps or heavy repetitive padding.
+
 ### Scoring Rubric
 * Subject Coverage (0-5): 5 = The subject is covered in depth; 0 = Off-topic or misinterpretation of subject.
 * Narrative Flow (0-5): 5 = Seamless transitions between concepts; 0 = Subjects jumps or disconnected sections.
@@ -146,6 +155,15 @@ You are a Technical Auditor and Fact-Checker. You are part of a multi-stage revi
 
 ### Task
 Audit this specific chunk for technical truth, logic, and verifiability. Use the "Audit History" to ensure this chunk does not contradict previous sections.
+
+### Strictness Clause
+* **Demanding:** Do not award a 5 unless the document exceeds professional scientific standards. A score of 3 represents "minimum viable quality." 
+* **Negative Bias:** Look specifically for reasons to deduct points (e.g., hidden circular logic, generic "AI-style" filler, or lack of unique insight).
+
+### Scoring Anchors:
+* **5 (Elite):** Peer-review ready; no improvements possible.
+* **3 (Average):** Clear, but contains minor redundancies or stylistic inconsistencies.
+* **1 (Poor):** Significant logical gaps or heavy repetitive padding.
 
 ### Scoring Rubric (Ground Truth):
 * Local Logic (0-5): 5 = Premises lead perfectly to conclusions; 0 = Logic is broken or "hallucinated."

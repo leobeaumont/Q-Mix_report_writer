@@ -11,3 +11,5 @@ __pycache__/
 chroma_data/
 *.json
 *.html
+*.pdf
+scoring_*.md
