@@ -102,7 +102,7 @@ def generate_report(results, output_file="scoring_report.md"):
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
-    report_name = "ACCADA_final"
+    report_name = ""
 
     # From your previous code
     pdf_chunks = extract_and_chunk("tests/test_documents/" + report_name + ".pdf", chunk_size=4000)
