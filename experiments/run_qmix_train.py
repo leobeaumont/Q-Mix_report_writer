@@ -101,7 +101,7 @@ async def run_episode(
         )
         step_buffer.append(step_data)
 
-        if (actions == 8).any():  # If any agent appended this step
+        if (actions == 7).any():  # If any agent appended this step
             # We spread the reward to all previous step until previous append action
             Score.instance().update(await report_score())
             LengthGoal.instance().update(length_score(length_goal, length_sigma))
@@ -138,7 +138,6 @@ async def train(args):
                              ).get("agents", ["LeadArchitect", 
                                               "Researcher", 
                                               "DataAnalyst", 
-                                              "TechnicalWriter", 
                                               "Reviewer", 
                                               "Collector"])
     n_agents = len(agent_names)

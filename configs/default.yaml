@@ -38,4 +38,4 @@ llm:
 
 agent_configs:
   redacting:
-    agents: [LeadArchitect, Researcher, DataAnalyst, TechnicalWriter, Reviewer, Collector]
+    agents: [LeadArchitect, Researcher, DataAnalyst, Reviewer, Collector]

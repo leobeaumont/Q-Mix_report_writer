@@ -20,10 +20,10 @@ from .gnn import GNNMessagePassing
 ACTION_NAMES = [
     "solo_process",                              # 0: Process independently, no communication
     "broadcast_all",                             # 1: Broadcast observation to all neighbors
-    *[f"selective_query{i}" for i in range(5)],  # 2 -> 6: Query a neighbor
-    "aggregate_refine",                          # 7: Aggregate neighbor responses and refine own answer
-    "append",                                    # 8: Send output to the collector node
-    "terminate",                                 # 9: Same as solo process and vote to end report generation.
+    *[f"selective_query{i}" for i in range(4)],  # 2 -> 5: Query a neighbor
+    "aggregate_refine",                          # 6: Aggregate neighbor responses and refine own answer
+    "append",                                    # 7: Send output to the collector node
+    "terminate",                                 # 8: Same as solo process and vote to end report generation.
 ]
 NUM_ACTIONS = len(ACTION_NAMES)
 

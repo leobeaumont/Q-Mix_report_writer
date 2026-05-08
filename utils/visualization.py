@@ -113,8 +113,7 @@ class StandaloneVisualizer:
             action_names = [
                 "Solo process", "Broadcast", "Selective query to LeadArchitect", 
                 "Selective query to Researcher", "Selective query to DataAnalyst", 
-                "Selective query to TechnicalWriter", "Selective query to Reviewer", 
-                "Aggregate", "Append", "Terminate"
+                "Selective query to Reviewer", "Aggregate", "Append", "Terminate"
             ]
 
             action_name = action_names[action_val] if (action_val is not None and action_val < len(action_names)) else "None"

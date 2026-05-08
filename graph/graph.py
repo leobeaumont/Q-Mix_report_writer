@@ -12,7 +12,6 @@ Communication patterns are determined by QMIX agent actions:
   - broadcast_all: edges to all neighbors
   - selective_query: edge to best neighbor
   - aggregate_refine: receive from all, send refined
-  - debate_check: adversarial edges
   - append: agent output is added to the report
   - terminate: end of the process and return the current state of the report
 """
@@ -84,6 +83,7 @@ class QMIXGraph:
         self.llm_name = llm_name
         self.agent_names = agent_names
         self.nodes: Dict[str, Node] = {}
+        self.collector_id: Optional[str] = None
 
         self._init_nodes()
 
@@ -107,6 +107,8 @@ class QMIXGraph:
                 node_id = f"{agent_name}_{i}"
                 node = AgentRegistry.get(agent_name, id=node_id, llm_name=self.llm_name)
                 self.nodes[node_id] = node
+                if agent_name == "Collector":
+                    self.collector_id = node_id
             except Exception as e:
                 logger.warning(f"Failed to create agent {agent_name}: {e}")
 
@@ -146,10 +148,10 @@ class QMIXGraph:
         Each agent's action determines its communication pattern:
           0 - solo_process:        no edges
           1 - broadcast_all:       edges to all other agents
-          2 -> 6 selective_query:  edge to a specific partner
-          7 - aggregate_refine:    receive from all (reversed edges)
-          8 - append:              edge to collector (used to append text to the report)
-          9 - terminate:           end of communication (called when the report is considered complete)
+          2 -> 5 selective_query:  edge to a specific partner
+          6 - aggregate_refine:    receive from all (reversed edges)
+          7 - append:              edge to collector (used to append text to the report)
+          8 - terminate:           end of communication (called when the report is considered complete)
         """
         self._clear_spatial()
         n_acting = self.n_acting_agents
@@ -169,14 +171,14 @@ class QMIXGraph:
                             src.add_successor(dst, "spatial")
                             if self.execution_trace:
                                 self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[j])
-            elif action >= 2 and action <= 6:  # selective query
+            elif action >= 2 and action <= 5:  # selective query
                 best_j = action - 2
                 dst = self.nodes[self.node_ids[best_j]]
                 if not self._check_cycle(dst, {src}):
                     src.add_successor(dst, "spatial")
                     if self.execution_trace:
                         self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[best_j])
-            elif action == 7:  # aggregate (receive from all acting nodes)
+            elif action == 6:  # aggregate (receive from all acting nodes)
                 for j in range(n_acting):
                     if j != i:
                         other = self.nodes[self.node_ids[j]]
@@ -184,12 +186,13 @@ class QMIXGraph:
                             other.add_successor(src, "spatial")
                             if self.execution_trace:
                                 self.execution_trace.trace[-1][self.agent_names[j]]["message_to"].append(self.agent_names[i])
-            elif action == 8:  # append
-                collector = self.nodes[self.node_ids[5]]
-                src.add_successor(collector, "spatial")
-                if self.execution_trace:
-                    self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[5])
-            elif action == 9:  # terminate (when a majority wants it)
+            elif action == 7:  # append
+                if self.collector_id is not None:
+                    collector = self.nodes[self.collector_id]
+                    src.add_successor(collector, "spatial")
+                    if self.execution_trace:
+                        self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append("Collector")
+            elif action == 8:  # terminate (when a majority wants it)
                 terminate_votes += 1
                 if terminate_votes >= n_acting / 2:
                     self.terminated = True
@@ -223,7 +226,8 @@ class QMIXGraph:
                                                              "response": None,
                                                              "time": None} for i, action in enumerate(actions.tolist() + [None])}
                 round_template["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None}
-                round_template["Collector"]["report_state"] = ReportState.instance().content
+                if self.collector_id is not None:
+                    round_template["Collector"]["report_state"] = ReportState.instance().content
                 round_template["exec_order"] = []
                 self.execution_trace.trace.append(round_template)
 
@@ -278,7 +282,7 @@ class QMIXGraph:
                 continue
             
             node_index = self.node_ids.index(current_id)
-            node_action = kwargs.get("actions", [None] * (node_index + 1))[node_index] if node_index != 5 else None
+            node_action = kwargs.get("actions", [None] * (node_index + 1))[node_index] if node_index != 4 else None
 
             t1 = time.time()
             for attempt in range(max_tries):
