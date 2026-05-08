@@ -99,8 +99,9 @@ Agent-Q-Mix uses a `final answer` system, where all the agents interact during t
 To solve this problem, an `append loop` approach is used without breaking the structure of the original code. To do that, 2 new actions have been added: `append` and `terminate`. When the `append` action is used by an agent, its output is sent to a `collector` agent. The `collector` is only used to store the current state of the report as it is written and does nothing else. When the `terminate` action is selected by the majority of the agents, the round loop ends and the report stored inside of the `collector` agent is returned. This approach keeps the graph design of the original code. This means that the information flows from the user query to the final report with no interruption. 
 
 Technical changes:
-- Creation of `append` and `terminate` actions
-- Created a copy of `selective_query` and `debate_check` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $6 + 2 N$ actions where $N$ is the number of agents.
+- Creation of `append` and `terminate` actions.
+- Removed `debate` and `execute_verify` actions.
+- Created a copy of `selective_query` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $5 + N$ actions where $N$ is the number of agents.
 - When multiple agents try using the `append` action on the same turn, only the highest ID agent can append (to give priority to `Reviewer` and `Technical Writer` agents).
 - Creation of the `collector` node that receives the output of the agents choosing the `append` action.
 - The `collector` is a normal node like other agents, but it can't use any action.
@@ -108,7 +109,7 @@ Technical changes:
 - When an agent choose the `append` action, its prompt informs it that its output will be added to the report.
 - The verification to avoid graph cycles is still present and gives messaging priority to lower indices agents.
 - When an agent action is denied because of an append lock or a cycle, its action is defaulted to `solo_process`.
-- Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge (for `execute_verify` action) and mutual edge (for `debate` action).
+- Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge and mutual edge.
 - Modified Q-Mix to only train and select actions for the 5 acting agents, while ignoring the `collector` node.
 - Added a dynamic `ReportState` singleton to track the report text, sources and a progress summary. The report state is updated by the `Collector` agents and the summary of progress is given as context to other agents.
 - The report state summary is embedded inside of the observation features as context for the Q-Mixer.
@@ -141,10 +142,6 @@ Technical changes:
 
 ### Adding tool usage to the `execute_verify` action
 
-In the original implementation of Agent-Q-Mix, the `solo_process` and `execute_verify` actions have the same graph topology. The agent acts alone without creating communication edges to other agent. 
-
-In the report writing implementation, the graph accepts self edges (A -> A) that are created when the node uses the `execute_verify` action. The self edge is used to implement tool usage, to enrich the context of the agent. `execute_verify` will first communicate with the tool. Then, once the tool response is available, the agent will process its turn with the tool response added to its context.
-
 The first tool implemented is a `RAG` tool (Retrieval Augmented Generation). It is exclusive to the `Researcher` agent. When used, it lets the agent search for sources documents from a database. The sources used during report generation are tracked, to ensure proper citation and verifiability of the final result.
 
 Technical changes:
@@ -154,7 +151,7 @@ Technical changes:
 - The current implementation of the `RAG` uses the `ChromaDB` library.
 - Added a `SourceBuffer` singleton to track the sources used to generate each part of the report. The buffer stores the sources given by the `RAG` tool to generate the current report part and it is flushed when the part is added to the `ReportState`. Once flushed, the sources are stored in the `ReportState` with their respective part.
 - The `Collector` agent is responsible for flushing the sources from the `SourceBuffer` and storing them inside of the `ReportState` when processing an `append` action.
-- When a `Researcher` agent execute an `execute_verify` action, it start by generating a query to the `RAG` tool, using its current context. The query is then used on the `RAG` database to find relevent chunks of information. These chunks are then added to the `Researcher`'s context before generating its notes for the next round of communication.
+- When a `Researcher` agent execute, it start by generating a query to the `RAG` tool, using its current context. The query is then used on the `RAG` database to find relevent chunks of information. These chunks are then added to the `Researcher`'s context before generating its notes for the next round of communication.
 - To respect the graph architecture of the project, the `RAG`'s selected documents are passed to the `Researcher` agent via a `spatial` edge. With this representation, the tool can be represented by a node just like any other agent.
 - Wrote prompt for preparing the query given to the `RAG` tool. The query is prepared with the communication context of the `Researcher` agent and aims to formulate a precise and effective query.
 - Added `ChromaDB` and `ollama` libraries to the requirements. `ChromaDB` is used to handle the vectorial database and `ollama` is used to embed the query locally using oLLama (to avoid data leaks).
@@ -177,4 +174,4 @@ Technical changes:
 - The animation shows the evolution of communications during every step of every round of the process. Displaying the informations of the `ExecutionTrace` in a human friendly interface. The goal of the interface is to debug the redaction process and find the errors in a timely manner.
 - On the graph each agent is represented by a `Node`. The communication are represented by `Edges`.
 - The `timeline` of the exectuion is represented by a `slide bar`, and the active agent and communications at a specific execution step are highlighted for clarity. The information on the active agent is displayed to the right of the graph, alongside the state of the report at that current step.
-- The `play` button lets the user observ the graph evolution by going through steps automatically at a rapid pace.  
+- The `play` button lets the user observ the graph evolution by going through steps automatically at a rapid pace.

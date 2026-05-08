@@ -77,7 +77,10 @@ async def report_score() -> float:
     history_window = score_memory.micro_notes[-3:]
     for i, notes in enumerate(history_window):
         user_prompt += f"<chunk {i} notes>\n" + notes + f"\n</chunk {i} notes>\n"
-    user_prompt += "</audit history>\n<current chunk>\n" + ReportState.instance().additions[-1] + "\n</current chunk>\n"
+    user_prompt += "</audit history>\n"
+
+    current_chunk = ReportState.instance().additions[-1] if ReportState.instance().additions else ReportState.instance().content
+    user_prompt += "<current chunk>\n" + current_chunk + "\n</current chunk>\n"
 
     schema = prompt_set.get_schema("Micro Scoring")
 

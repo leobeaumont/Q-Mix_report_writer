@@ -77,14 +77,6 @@ async def run_episode(
     while step < max_rounds and not graph.terminated:
         actions, hidden = trainer.select_actions(obs, adj, hidden, epsilon)
 
-        # Placeholder for action mapping - in practice, this should be defined based on your action space
-        # TO REMOVE LATER
-        actions[0] = 1
-        actions[1] = 4
-        actions[2] = 14
-        actions[3] = 0
-        actions[4] = 7
-
         tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
         answers, tokens_used = await graph.arun(
             {"task": task_text},
@@ -109,7 +101,7 @@ async def run_episode(
         )
         step_buffer.append(step_data)
 
-        if (actions == 14).any():  # If any agent appended this step
+        if (actions == 8).any():  # If any agent appended this step
             # We spread the reward to all previous step until previous append action
             Score.instance().update(await report_score())
             LengthGoal.instance().update(length_score(length_goal, length_sigma))

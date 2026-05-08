@@ -12,7 +12,6 @@ Communication patterns are determined by QMIX agent actions:
   - broadcast_all: edges to all neighbors
   - selective_query: edge to best neighbor
   - aggregate_refine: receive from all, send refined
-  - execute_verify: code execution + tool use
   - debate_check: adversarial edges
   - append: agent output is added to the report
   - terminate: end of the process and return the current state of the report
@@ -27,8 +26,6 @@ import time
 from typing import Any, List, Optional, Dict, Tuple
 
 from graph.node import Node
-from prompt.prompt_set_registry import PromptSetRegistry
-from qmix.agent_network import ACTION_NAMES
 from utils.log import get_logger
 from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace
 
@@ -151,10 +148,8 @@ class QMIXGraph:
           1 - broadcast_all:       edges to all other agents
           2 -> 6 selective_query:  edge to a specific partner
           7 - aggregate_refine:    receive from all (reversed edges)
-          8 - execute_verify:      edge to self (tool use, minimal comm)
-          9 -> 13 debate_check:    edge to specific partner for debate
-          14 - append:             edge to collector (used to append text to the report)
-          15 - terminate:          end of communication (called when the report is considered complete)
+          8 - append:              edge to collector (used to append text to the report)
+          9 - terminate:           end of communication (called when the report is considered complete)
         """
         self._clear_spatial()
         n_acting = self.n_acting_agents
@@ -189,24 +184,12 @@ class QMIXGraph:
                             other.add_successor(src, "spatial")
                             if self.execution_trace:
                                 self.execution_trace.trace[-1][self.agent_names[j]]["message_to"].append(self.agent_names[i])
-            elif action == 8:  # execute_verify (self communication for tool use)
-                src.add_successor(src, "spatial")
-            elif action >= 9 and action <= 13:  # debate
-                partner = action - 9
-                if partner != i:
-                    dst = self.nodes[self.node_ids[partner]]
-                    if not self._check_cycle(dst, {src}):
-                        src.add_successor(dst, "spatial")
-                        dst.add_successor(src, "spatial")
-                        if self.execution_trace:
-                                self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[partner])
-                                self.execution_trace.trace[-1][self.agent_names[partner]]["message_to"].append(self.agent_names[i])
-            elif action == 14:  # append
+            elif action == 8:  # append
                 collector = self.nodes[self.node_ids[5]]
                 src.add_successor(collector, "spatial")
                 if self.execution_trace:
                     self.execution_trace.trace[-1][self.agent_names[i]]["message_to"].append(self.agent_names[5])
-            elif action == 15:  # terminate (when a majority wants it)
+            elif action == 9:  # terminate (when a majority wants it)
                 terminate_votes += 1
                 if terminate_votes >= n_acting / 2:
                     self.terminated = True

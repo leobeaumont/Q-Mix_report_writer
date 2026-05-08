@@ -45,24 +45,22 @@ class Researcher(Node):
         execution_trace = kwargs.get("execution_trace", None)
 
         # Tool use
-        action = kwargs.get("action", None)
-        if True: #action == 8:  # when using execute_verify
-            system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
-            _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
-            if execution_trace:
-                execution_trace.trace[-1]["RAG"]["prompt"] = system_prompt + user_prompt
-                execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
-                execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
-                execution_trace.trace[-1]["exec_order"].append("RAG")
-            message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-            query = self.llm.gen(message)
-            documents = self.rag.query_docs(query)
-            if execution_trace:
-                execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
-            for i, document in enumerate(documents):
-                citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
-                spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
-                SourceBuffer.instance().add(document)
+        system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
+        _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        if execution_trace:
+            execution_trace.trace[-1]["RAG"]["prompt"] = system_prompt + user_prompt
+            execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
+            execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
+            execution_trace.trace[-1]["exec_order"].append("RAG")
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        query = self.llm.gen(message)
+        documents = self.rag.query_docs(query)
+        if execution_trace:
+            execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
+        for i, document in enumerate(documents):
+            citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
+            spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
+            SourceBuffer.instance().add(document)
         
         # Base execution
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
@@ -78,24 +76,22 @@ class Researcher(Node):
         execution_trace = kwargs.get("execution_trace", None)
 
         # Tool use
-        action = kwargs.get("action", None)
-        if True: # action == 8:  # when using execute_verify
-            system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
-            _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
-            if execution_trace:
-                execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
-                execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
-                execution_trace.trace[-1]["exec_order"].append("RAG")
-            message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-            query = await self.llm.agen(message)
-            documents = self.rag.query_docs(query)
-            if execution_trace:
-                execution_trace.trace[-1]["RAG"]["prompt"] = query
-                execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
-            for i, document in enumerate(documents):
-                citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
-                spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
-                SourceBuffer.instance().add(document)
+        system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
+        _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        if execution_trace:
+            execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
+            execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
+            execution_trace.trace[-1]["exec_order"].append("RAG")
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        query = await self.llm.agen(message)
+        documents = self.rag.query_docs(query)
+        if execution_trace:
+            execution_trace.trace[-1]["RAG"]["prompt"] = query
+            execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
+        for i, document in enumerate(documents):
+            citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
+            spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
+            SourceBuffer.instance().add(document)
         
         # Base execution
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
