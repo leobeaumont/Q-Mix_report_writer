@@ -10,7 +10,7 @@ QMIX-based multi-agent reinforcement learning that learns optimal communication 
 
 1. **GNN Message Passing** — Agents communicate through a learned graph topology
 2. **Per-Agent Q-Network** — GNN -> GRU (temporal) -> MLP (Q-values)
-3. **QMIX Mixing Network** — Monotonic: dQ_tot/dQ_i >= 0
+3. **QMIX Mixing Network** — Monotonic: $\frac{\delta Q_{tot}}{\delta Q_i} >= 0$
 4. **Reward** = $\Delta_{report \, score} \times w_{report \, score} + \Delta_{token \, goal} \times w_{token \, goal}$, where $\Delta_{report \, score}$ is the variation of the report score compared to its last state and $\Delta_{token \, goal}$ is the variation of the token goal score compared to its last state. The token goal score is calculated using a Gaussian curve centered around the token goal.
 
 
@@ -18,12 +18,10 @@ QMIX-based multi-agent reinforcement learning that learns optimal communication 
 
 | Action | Name | Communication Pattern |
 |--------|------|----------------------|
-| 1 | `solo_process` | No communication |
-| 2 | `broadcast_all` | Send to all neighbors |
-| 3 | `selective_query` | Query one neighbor |
-| 4 | `aggregate_refine` | Receive from all, refine |
-| 5 | `execute_verify` | Tool use, minimal comm |
-| 6 | `debate_check` | Adversarial debate pair |
+| 0 | `solo_process` | No communication |
+| 1 | `broadcast_all` | Send to all neighbors |
+| 2 - 5 | `selective_query` | Query one neighbor (one for each agent) |
+| 6 | `aggregate_refine` | Receive from all, refine |
 | 7 | `append` | Send to a collector node |
 | 8 | `terminate` | Output the content of collector node |
 
@@ -89,8 +87,7 @@ The team of agents used for report writing is the following:
 1) Lead architect: responsible for the outline, highest messaging and appending priority.
 2) Researcher: can use RAG tools to look for information in the database.
 3) Data analyst: turns raw data into ideas.
-4) Technical writer: responsible for turning ideas into developped text.
-5) Reviewer: review and grades writings, used to calculate the reward function, lowest messaging and appending priority.
+4) Reviewer: review and grades writings, used to calculate the reward function, lowest messaging and appending priority.
 
 ### From `final answer` to `append loop` system
 
@@ -102,7 +99,7 @@ Technical changes:
 - Creation of `append` and `terminate` actions.
 - Removed `debate` and `execute_verify` actions.
 - Created a copy of `selective_query` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $5 + N$ actions where $N$ is the number of agents.
-- When multiple agents try using the `append` action on the same turn, only the highest ID agent can append (to give priority to `Reviewer` and `Technical Writer` agents).
+- When multiple agents try using the `append` action on the same turn, only the highest ID agent can append.
 - Creation of the `collector` node that receives the output of the agents choosing the `append` action.
 - The `collector` is a normal node like other agents, but it can't use any action.
 - The `collector` node makes sure the text is formatted correctly and no LLM remnants are passed into the report.
