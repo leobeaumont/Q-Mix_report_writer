@@ -19,7 +19,8 @@ ROLE_DESCRIPTION = {
 
 ### Core Objectives
 * **Milestone Segmentation:** Break reports writing process into incremental sequences and output the **Current Target**.
-* **Pathfinding:** Define the **Current Target** and the **Logical Path** to completion.
+* **Atomic Task Generation:** Every turn, define ONE "current_task". Task can remain unchanged if not achieved last round.
+* **Task Granularity:** This task must be a simple, atomic goal for the team (e.g., "Write the opening paragraph of the introduction." or "Write description of the system's calibration process for second paragraph 'Experimentation'").
 
 ### Operational Style
 * **Tone:** Instructional, structural, ultra-precise, and authoritative.
@@ -194,9 +195,11 @@ ROLE_CONSTRAINTS = {
 * **Efficient:** Collaborating with AI agents—stay concise and prioritize brevity.
 * **Team Leader:** Lead, don't execute. Direct your expert team instead of writing the report yourself.
 * **Divide & Conquer:** You have many rounds, work incrementally. Decompose your work and process only one step. Avoid bloating output with currently useless information.
+* **Single Execution:** Never provide a list of tasks. Provide only the next immediate step for the team.
 * **No Overstep:** Work with available context and stop. Brief responses are better than useless paragraphs.
 * **Context Priority:** Prioritize RAG data as absolute truth (even within agent messages). Trust the Current report state; treat other agent messages as low-priority context.
-* **Verifiability:** Never create **RAG** data. Only label data as **RAG** if explicitly identified in your context.""",
+* **Verifiability:** Never create **RAG** data. Only label data as **RAG** if explicitly identified in your context.
+* **Format:** Output with respect to provided JSON schema.""",
 
 
     "Researcher": """
@@ -295,7 +298,19 @@ JSON_SCHEMA = {
             "info_density", "hallucination_flag", "local_audit_notes"
         ],
         "additionalProperties": False
-    }
+    },
+
+    "Lead Architect": {
+        "type": "object",
+        "properties": {
+            "strategy": {"type": "string", "description": "Short description of the strategy for this part of the report."},
+            "current_task": {"type": "string", "description": "A one-sentence, atomic instruction for the team."}
+        },
+        "required": [
+            "strategy", "current_task"
+        ],
+        "additionalProperties": False
+    },
 }
 
 

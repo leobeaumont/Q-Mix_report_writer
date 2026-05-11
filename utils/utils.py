@@ -3,6 +3,28 @@ import json
 import hashlib
 from typing import Any, Dict, List, Optional
 
+def safe_json_parse(text):
+    """Clean markdown and attempt to fix truncated JSON."""
+    if not text:
+        return {}
+    
+    # 1. Strip Markdown code blocks if they exist
+    text = re.sub(r"```json\s*|\s*```", "", text).strip()
+    
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # 2. Attempt to close an unterminated string/object
+        if text.count('"') % 2 != 0:
+            text += '"'
+        if not text.endswith("}"):
+            text += "}"
+        
+        try:
+            return json.loads(text)
+        except:
+            print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
+            return {}
 
 def extract_number(text: str) -> Optional[float]:
     """Extract the last number from text (for math answers)."""

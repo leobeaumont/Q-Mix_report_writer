@@ -27,9 +27,11 @@ class Reviewer(Node):
         for id, info in temporal_info.items():
             temporal_str += f"#### Previous output from {info['role']}:\n{info['output']}\n\n"
 
-        user_prompt = f"\n\n### Task:\n{raw_inputs['task']}\n"
+        user_prompt = f"\n\n### Report Subject:\n{raw_inputs['task']}\n"
 
-        user_prompt += f"\n### Current report state:\n{ReportState.instance().progress}\n"
+        user_prompt += f"\n### Current report state:\n{self.report.progress}\n"
+
+        user_prompt += f"\n### Current Team Objective:\n{self.report.task}\n"
 
         if spatial_str:
             user_prompt += f"\n### Received messages:\n\n{spatial_str}"

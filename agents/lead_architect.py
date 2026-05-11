@@ -2,6 +2,7 @@ from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
 from utils.globals import ReportState
+from utils.utils import safe_json_parse
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -27,9 +28,11 @@ class LeadArchitect(Node):
         for id, info in temporal_info.items():
             temporal_str += f"#### Previous output from {info['role']}:\n{info['output']}\n\n"
 
-        user_prompt = f"\n\n### Task:\n{raw_inputs['task']}\n"
+        user_prompt = f"\n\n### Report Subject:\n{raw_inputs['task']}\n"
 
-        user_prompt += f"\n### Current report state:\n{ReportState.instance().progress}\n"
+        user_prompt += f"\n### Current report state:\n{self.report.progress}\n"
+
+        user_prompt += f"\n### Current Team Objective:\n{self.report.task}\n"
 
         if spatial_str:
             user_prompt += f"\n### Received messages:\n\n{spatial_str}"
@@ -42,24 +45,30 @@ class LeadArchitect(Node):
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        schema = self.prompt_set.get_schema(self.role)
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message)
+        response = self.llm.gen(message, response_schema=schema)
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["response"] = response
-        return response
+        response = safe_json_parse(response)
+        self.report.task = response.get("current_task", self.report.task)
+        return response.get("strategy", "")
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        schema = self.prompt_set.get_schema(self.role)
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = await self.llm.agen(message)
+        response = await self.llm.agen(message, response_schema=schema)
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["response"] = response
-        return response
+        response = safe_json_parse(response)
+        self.report.task = response.get("current_task", self.report.task)
+        return response.get("strategy", "")
 
 if __name__ == "__main__":
     input_arg = {"task": "write a report"}

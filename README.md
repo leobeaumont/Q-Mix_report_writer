@@ -110,6 +110,7 @@ Technical changes:
 - Modified Q-Mix to only train and select actions for the 5 acting agents, while ignoring the `collector` node.
 - Added a dynamic `ReportState` singleton to track the report text, sources and a progress summary. The report state is updated by the `Collector` agents and the summary of progress is given as context to other agents.
 - The report state summary is embedded inside of the observation features as context for the Q-Mixer.
+- `Lead Architect` now define a `Current Team Objective` to help the team separate the goal of the round from the global report subject. This aims to help the agents decompose the task into small trivial parts.
 
 ### From a `post-process` to `in real time` reward system
 
@@ -137,7 +138,7 @@ Technical changes:
     - The final score is normalized between 0 and 1. To ensure it has the same scale as the `length score`.
 - To compute the `reward`, the evolution of the `length` and `report` scores is used. This ensure that an addition that increases significantly the global score is greatly rewarded. However is mediocre addition is not rewarded much and a bad addition can even be penalized.
 
-### Adding tool usage to the `execute_verify` action
+### Adding tool usage
 
 The first tool implemented is a `RAG` tool (Retrieval Augmented Generation). It is exclusive to the `Researcher` agent. When used, it lets the agent search for sources documents from a database. The sources used during report generation are tracked, to ensure proper citation and verifiability of the final result.
 

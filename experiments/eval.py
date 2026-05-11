@@ -4,30 +4,8 @@ import re
 
 from utils.globals import ReportState, Score
 from utils.config import get_llm
+from utils.utils import safe_json_parse
 from prompt.prompt_set_registry import PromptSetRegistry
-
-def safe_json_parse(text):
-    """Clean markdown and attempt to fix truncated JSON."""
-    if not text:
-        return {}
-    
-    # 1. Strip Markdown code blocks if they exist
-    text = re.sub(r"```json\s*|\s*```", "", text).strip()
-    
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # 2. Attempt to close an unterminated string/object
-        if text.count('"') % 2 != 0:
-            text += '"'
-        if not text.endswith("}"):
-            text += "}"
-        
-        try:
-            return json.loads(text)
-        except:
-            print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
-            return {}
 
 def length_score(target, sigma) -> float:
     """Score the length of the production between 0 and 1."""

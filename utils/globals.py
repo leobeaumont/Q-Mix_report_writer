@@ -44,12 +44,15 @@ class ReportState(Singleton):
         self.additions = []
         self.sources = []
         self.progress = "[NOTHING WRITTEN SO FAR]"
+        self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
     
     def reset(self):
         self.content = ""
         self.additions = []
         self.sources = []
         self.progress = "[NOTHING WRITTEN SO FAR]"
+        self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
+
 
     def append(self, text: str, progress: str, new_sources: Optional[List] = None):
         self.content += text
