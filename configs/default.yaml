@@ -39,3 +39,9 @@ llm:
 agent_configs:
   redacting:
     agents: [LeadArchitect, Researcher, DataAnalyst, Reviewer, Collector]
+    respective_ollama_urls:
+      LeadArchitect: http://localhost:11434
+      Researcher: http://localhost:11434
+      DataAnalyst: http://localhost:11434
+      Reviewer: http://localhost:11434
+      Collector: http://localhost:11434

@@ -5,7 +5,7 @@ from tenacity import retry, wait_random_exponential, stop_after_attempt
 from .format import Message
 from .llm import LLM
 from .llm_registry import LLMRegistry
-from utils.config import get_llm_config
+from utils.config import get_llm_config, get_config
 from utils.globals import PromptTokens, CompletionTokens
 
 
@@ -18,17 +18,31 @@ def _build_ollama_endpoint(base_url: str) -> str:
     return f"{base_url}/v1/chat/completions"
 
 
-def _get_ollama_endpoint() -> str:
+def _get_ollama_endpoint(calling_agent: Optional[str] = None) -> str:
     """Read the Ollama base URL from default.yaml at call time."""
+    if calling_agent:
+        config = get_config()
+        agent_config = config.get("agent_configs", {}).get("redacting", {})
+        respective_urls = agent_config.get("respective_ollama_urls", {})
+        base_url = respective_urls.get(calling_agent, None)
+        if base_url:
+            return _build_ollama_endpoint(base_url)
     llm_config = get_llm_config()
     base_url = llm_config.get("ollama_base_url", "http://localhost:11434")
     return _build_ollama_endpoint(base_url)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
-async def achat_ollama(model_name: str, messages: list, max_tokens: int = 4096, temperature: float = 0.4, response_schema: Optional[Dict] = None):
+async def achat_ollama(
+    model_name: str,
+    messages: list,
+    max_tokens: int = 4096,
+    temperature: float = 0.4,
+    response_schema: Optional[Dict] = None,
+    calling_agent: Optional[str] = None,
+) -> str:
     """Send a query to a LLM using oLLama."""
-    endpoint = _get_ollama_endpoint()
+    endpoint = _get_ollama_endpoint(calling_agent)
     headers = {
         "Content-Type": "application/json",
     }
@@ -97,6 +111,7 @@ class OllamaChat(LLM):
         temperature: Optional[float] = None,
         response_schema: Optional[Dict] = None,
         num_comps: Optional[int] = None,
+        calling_agent: Optional[str] = None,
     ) -> Union[List[str], str]:
         if max_tokens is None:
             max_tokens = self._max_tokens
@@ -110,7 +125,14 @@ class OllamaChat(LLM):
         elif isinstance(messages, list) and all(isinstance(m, dict) for m in messages):
             messages = [Message(role=m["role"], content=m["content"]) for m in messages]
 
-        return await achat_ollama(self.model_name, messages, max_tokens=max_tokens, temperature=temperature, response_schema=response_schema)
+        return await achat_ollama(
+            self.model_name,
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_schema=response_schema,
+            calling_agent=calling_agent
+        )
 
     def gen(
         self,
@@ -119,6 +141,7 @@ class OllamaChat(LLM):
         temperature: Optional[float] = None,
         response_schema: Optional[Dict] = None,
         num_comps: Optional[int] = None,
+        calling_agent: Optional[str] = None,
     ) -> Union[List[str], str]:
         import asyncio
 
@@ -126,5 +149,10 @@ class OllamaChat(LLM):
         if loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, self.agen(messages, max_tokens, temperature, response_schema, num_comps)).result()
-        return asyncio.run(self.agen(messages, max_tokens, temperature, response_schema, num_comps))
+                return pool.submit(asyncio.run, self.agen(messages, max_tokens, temperature, response_schema, num_comps, calling_agent)).result()
+        return asyncio.run(self.agen(messages, max_tokens, temperature, response_schema, num_comps, calling_agent))
+
+
+if __name__ == "__main__":
+    print(_get_ollama_endpoint("LeadArchitect"))
+    print(_get_ollama_endpoint("Researcher"))

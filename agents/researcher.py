@@ -69,7 +69,7 @@ class Researcher(Node):
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message)
+        response = self.llm.gen(message, calling_agent="Researcher")
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["response"] = response
         return response
@@ -100,7 +100,7 @@ class Researcher(Node):
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = await self.llm.agen(message)
+        response = await self.llm.agen(message, calling_agent="Researcher")
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["response"] = response
         return response

@@ -49,7 +49,7 @@ class LeadArchitect(Node):
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message, response_schema=schema)
+        response = self.llm.gen(message, response_schema=schema, calling_agent="LeadArchitect")
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["response"] = response
         response = safe_json_parse(response)
@@ -63,7 +63,7 @@ class LeadArchitect(Node):
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = await self.llm.agen(message, response_schema=schema)
+        response = await self.llm.agen(message, response_schema=schema, calling_agent="LeadArchitect")
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["response"] = response
         response = safe_json_parse(response)

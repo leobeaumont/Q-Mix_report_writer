@@ -47,7 +47,7 @@ class TechnicalWriter(Node):
         if execution_trace:
             execution_trace.trace[-1]["TechnicalWriter"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message)
+        response = self.llm.gen(message, calling_agent="TechnicalWriter")
         if execution_trace:
             execution_trace.trace[-1]["TechnicalWriter"]["response"] = response
         return response
@@ -58,7 +58,7 @@ class TechnicalWriter(Node):
         if execution_trace:
             execution_trace.trace[-1]["TechnicalWriter"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = await self.llm.agen(message)
+        response = await self.llm.agen(message, calling_agent="TechnicalWriter")
         if execution_trace:
             execution_trace.trace[-1]["TechnicalWriter"]["response"] = response
         return response
