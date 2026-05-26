@@ -21,26 +21,11 @@ class Researcher(Node):
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
-
-        spatial_str = ""
-        temporal_str = ""
-        for id, info in spatial_info.items():
-            spatial_str += f"#### Message from {info['role']}:\n{info['output']}\n\n"
-        for id, info in temporal_info.items():
-            temporal_str += f"#### Previous output from {info['role']}:\n{info['output']}\n\n"
-
-        user_prompt = f"\n\n### Report Subject:\n{raw_inputs['task']}\n"
-
-        user_prompt += f"\n### Current report state:\n{self.report.progress}\n"
-
-        user_prompt += f"\n### Current Team Objective:\n{self.report.task}\n"
-
-        if spatial_str:
-            user_prompt += f"\n### Received messages:\n\n{spatial_str}"
-        if temporal_str:
-            user_prompt += f"### Your previous output:\n\n{temporal_str}"
-        user_prompt += "### [WRITE OUTPUT HERE]"
-
+        user_prompt = self._build_user_prompt(
+            raw_inputs, spatial_info, temporal_info,
+            "Current report state", self.report.progress,
+            **kwargs,
+        )
         return system_prompt, user_prompt
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
@@ -48,7 +33,7 @@ class Researcher(Node):
 
         # Tool use
         system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
-        _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        _, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["prompt"] = system_prompt + user_prompt
             execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
@@ -65,7 +50,7 @@ class Researcher(Node):
             SourceBuffer.instance().add(document)
         
         # Base execution
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
@@ -79,7 +64,7 @@ class Researcher(Node):
 
         # Tool use
         system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
-        _, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        _, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
             execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
@@ -96,7 +81,7 @@ class Researcher(Node):
             SourceBuffer.instance().add(document)
         
         # Base execution
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]

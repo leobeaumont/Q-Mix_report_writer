@@ -41,30 +41,61 @@ class Mode(Singleton):
 class ReportState(Singleton):
     def __init__(self):
         self.content = ""
-        self.additions = []
-        self.sources = []
+        self.sections: List[Dict] = []   # structured view for in-place editing
+        self.additions: List[str] = []
+        self.sources: List = []
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
-    
+
     def reset(self):
         self.content = ""
+        self.sections = []
         self.additions = []
         self.sources = []
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
 
-
     def append(self, text: str, progress: str, new_sources: Optional[List] = None):
-        self.content += text
+        """Append a new section. Infers title from first Markdown heading."""
+        first_line = text.strip().split("\n")[0] if text.strip() else ""
+        title = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
+        section_id = f"section_{len(self.sections) + 1}"
+        self.sections.append({"id": section_id, "title": title, "content": text})
+        self.content += text       # backward compat: raw concatenation unchanged
         self.additions.append(text)
         self.progress = progress
-
         if new_sources is not None:
             self.sources += new_sources
-    
+        return section_id
+
+    def replace_section(self, section_id: str, new_content: str) -> bool:
+        """Replace an existing section's content in-place.
+
+        Also rebuilds self.content so all existing readers stay correct.
+        Returns False if section_id is not found.
+        """
+        for section in self.sections:
+            if section["id"] == section_id:
+                first_line = new_content.strip().split("\n")[0] if new_content.strip() else ""
+                if first_line.startswith("#"):
+                    section["title"] = first_line.lstrip("#").strip()
+                section["content"] = new_content
+                self.content = "\n\n".join(s["content"] for s in self.sections)
+                return True
+        return False
+
+    def list_sections(self) -> str:
+        """Formatted section index for agent context (REVIEW / REVISION phases)."""
+        if not self.sections:
+            return "[No sections written yet]"
+        return "\n".join(
+            f"- {s['id']}: {s['title'] or '(untitled)'}"
+            for s in self.sections
+        )
+
     def get_last(self) -> str:
-        if len(self.additions) > 0:
-            return self.additions[-1]
+        if self.sections:
+            return self.sections[-1]["content"]
         return "[NO PREVIOUS TEXT]"
     
 class Score(Singleton):

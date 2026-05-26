@@ -1,3 +1,12 @@
+import re
+
+# Patterns that mark an evidence item as absent/unavailable from the knowledge base.
+# Used by _data_analyst_has_content() to decide whether to silence the Collector.
+_ABSENCE_RE = re.compile(
+    r'\b(?:State Deficiency|absent|not found|no definition|no data|unavailable|Term absent)\b',
+    re.IGNORECASE,
+)
+
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
@@ -17,32 +26,64 @@ class Collector(Node):
         self.report = ReportState.instance()
         self.source_buffer = SourceBuffer.instance()
 
-    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs): 
+    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
-
-        spatial_str = ""
-        for id, info in spatial_info.items():
-            spatial_str += f"#### Message from {info['role']}:\n{info['output']}\n\n"
-
-        user_prompt = f"\n\n### Report Subject:\n{raw_inputs['task']}\n"
-
-        user_prompt += f"\n### Previous Text Production:\n{self.report.get_last()}\n"
-
-        user_prompt += f"\n### Current Team Objective:\n{self.report.task}\n"
-
-        if spatial_str:
-            user_prompt += f"\n### Received messages:\n\n{spatial_str}"
-        user_prompt += "### [WRITE OUTPUT HERE]"
-
+        user_prompt = self._build_user_prompt(
+            raw_inputs, spatial_info, temporal_info,
+            "Previous Text Production", self.report.get_last(),
+            **kwargs,
+        )
         return system_prompt, user_prompt
+
+    def _is_revision_phase(self) -> bool:
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            return PhaseState.instance().current_phase == PhaseType.REVISION
+        except Exception:
+            return False
+
+    def _data_analyst_has_content(self, spatial_info: dict) -> bool:
+        """Return False when DataAnalyst's message consists entirely of absence markers.
+
+        Triggers a Collector skip so that meta-commentary about missing evidence
+        never reaches the report. When DataAnalyst is not present in spatial_info
+        the method returns True (don't block other senders).
+        """
+        for info in spatial_info.values():
+            if info.get("role") != "Data Analyst":
+                continue
+            output = str(info.get("output", ""))
+            for line in output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("[SECTION_ID:"):
+                    continue
+                if not _ABSENCE_RE.search(line):
+                    return True   # at least one positive evidence line
+            return False          # DataAnalyst present but every line is an absence marker
+        return True               # DataAnalyst not in spatial_info — don't block
+
+    def _extract_section_id(self, spatial_info: dict) -> str:
+        """Parse [SECTION_ID: section_X] tag emitted by DataAnalyst during REVISION."""
+        for info in spatial_info.values():
+            match = re.search(
+                r'\[SECTION_ID:\s*(section_\d+)\]',
+                str(info.get("output", "")),
+                re.IGNORECASE,
+            )
+            if match:
+                return match.group(1)
+        return ""
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
+        if not self._data_analyst_has_content(spatial_info):
+            return
         execution_trace = kwargs.get("execution_trace", None)
-        
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
@@ -56,7 +97,14 @@ class Collector(Node):
         response2 = self.llm.gen(message, calling_agent="Collector")
 
         new_sources = self.source_buffer.flush()
-        self.report.append(response1, response2, new_sources)
+        if self._is_revision_phase():
+            section_id = self._extract_section_id(spatial_info)
+            if section_id and self.report.replace_section(section_id, response1):
+                self.report.progress = response2
+            else:
+                self.report.append(response1, response2, new_sources)
+        else:
+            self.report.append(response1, response2, new_sources)
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
         return response1
@@ -64,9 +112,11 @@ class Collector(Node):
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
+        if not self._data_analyst_has_content(spatial_info):
+            return
         execution_trace = kwargs.get("execution_trace", None)
-        
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
@@ -80,7 +130,14 @@ class Collector(Node):
         response2 = await self.llm.agen(message, calling_agent="Collector")
 
         new_sources = self.source_buffer.flush()
-        self.report.append(response1, response2, new_sources)
+        if self._is_revision_phase():
+            section_id = self._extract_section_id(spatial_info)
+            if section_id and self.report.replace_section(section_id, response1):
+                self.report.progress = response2
+            else:
+                self.report.append(response1, response2, new_sources)
+        else:
+            self.report.append(response1, response2, new_sources)
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
         return response1

@@ -48,3 +48,13 @@ class PromptSet(ABC):
     @staticmethod
     def postprocess_answer(answer: str) -> str:
         return answer.strip()
+
+    def get_context_block(self, role: str, **kwargs) -> str:
+        """Optional context injected near the top of the user prompt.
+
+        Override in prompt set subclasses to surface system-specific metadata:
+          - Handcrafted graph: current phase, round, and per-role objective.
+          - QMIX graph: the action selected by the network for this agent.
+        Returning an empty string skips the block entirely.
+        """
+        return ""

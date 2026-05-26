@@ -2,6 +2,20 @@ import itertools
 from .prompt_set import PromptSet
 from .prompt_set_registry import PromptSetRegistry
 
+# Human-readable descriptions of every QMIX action value, shown to agents in
+# their user prompt so they understand why they are being called this round.
+_QMIX_ACTION_DESCRIPTIONS = {
+    0: "solo_process — work independently this round, no team communication",
+    1: "broadcast_all — share your output with the entire team",
+    2: "selective_query — direct your message to a specific teammate",
+    3: "selective_query — direct your message to a specific teammate",
+    4: "selective_query — direct your message to a specific teammate",
+    5: "selective_query — direct your message to a specific teammate",
+    6: "aggregate_refine — you are receiving input from all agents; synthesize it into a refined output",
+    7: "append — produce content ready to be written into the report",
+    8: "terminate — signal that the report is complete",
+}
+
 roles = itertools.cycle([
     "Lead Architect",
     "Researcher",
@@ -348,3 +362,13 @@ class RedactingPromptSet(PromptSet):
     @staticmethod
     def get_decision_role():
         pass
+
+    def get_context_block(self, role: str, **kwargs) -> str:
+        action = kwargs.get("action")
+        if action is None:
+            return ""
+        try:
+            desc = _QMIX_ACTION_DESCRIPTIONS.get(int(action), str(action))
+        except (TypeError, ValueError):
+            return ""
+        return f"### Current Action\n**QMIX selected:** {desc}\n"

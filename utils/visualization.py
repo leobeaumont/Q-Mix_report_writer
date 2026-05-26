@@ -414,6 +414,8 @@ class StandaloneVisualizer:
         show(final_layout)
 
 # --- EXECUTION ---
-trace = ExecutionTrace.instance().load_trace()
+import sys as _sys
+_trace_file = _sys.argv[1] if len(_sys.argv) > 1 else "execution_trace.json"
+trace = ExecutionTrace.instance().load_trace(_trace_file)
 viz = StandaloneVisualizer(trace)
 viz.show()
