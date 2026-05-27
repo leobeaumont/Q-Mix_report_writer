@@ -42,6 +42,17 @@ _META_PATTERNS: List[re.Pattern] = [
     re.compile(r'\bexecution\s+trace\b', re.IGNORECASE),                # internal term
 ]
 
+# Section-transition sentences: forward references to "the next/following/subsequent section".
+# These are inserted by the model when writing one section at a time, but they make no sense
+# in the final assembled document where sections flow directly into each other.
+_TRANSITION_PATTERNS: List[re.Pattern] = [
+    re.compile(r'\b[Tt]he\s+(?:next|following|subsequent)\s+section\b'),
+    re.compile(r'\b[Tt]he\s+(?:next|following|subsequent)\s+chapter\b'),
+    re.compile(r'\b[Ii]n\s+the\s+(?:next|following|subsequent)\s+section\b'),
+    re.compile(r'\b[Tt]he\s+(?:next|following|subsequent)\s+part\b'),
+    re.compile(r'\b(?:will|shall)\s+(?:be\s+)?(?:address|discuss|explore|present|detail|cover|examine|describe|introduce|outline)(?:ed|s)?\b.*\bsection\b'),
+]
+
 # Sentence boundary: period / ! / ? followed by whitespace and an uppercase letter.
 # Intentionally simple — avoids over-splitting on abbreviations like "Fig." while
 # still catching the vast majority of sentence boundaries in academic prose.
@@ -82,8 +93,11 @@ def filter_meta_commentary(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _is_meta_sentence(sentence: str) -> bool:
-    """Return True if the sentence matches any pipeline-internal pattern."""
-    return any(pattern.search(sentence) for pattern in _META_PATTERNS)
+    """Return True if the sentence matches any pipeline-internal or transition pattern."""
+    return (
+        any(pattern.search(sentence) for pattern in _META_PATTERNS)
+        or any(pattern.search(sentence) for pattern in _TRANSITION_PATTERNS)
+    )
 
 
 def _filter_line(line: str) -> str:

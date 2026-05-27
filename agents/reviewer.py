@@ -20,13 +20,23 @@ class Reviewer(Node):
         system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
         # Reviewer needs the report text for auditing, but capped to avoid
-        # context overflow on small models. We take the tail (most recent content).
+        # context overflow on small models.
+        # Strategy: show head + tail so both early duplicate sections and
+        # recent content are visible. If the report fits, show all of it.
         _MAX_CHARS = 6000
+        _HALF = _MAX_CHARS // 2
         full = self.report.content or self.report.progress
-        if len(full) > _MAX_CHARS:
-            report_content = f"[...truncated, showing last {_MAX_CHARS} chars...]\n" + full[-_MAX_CHARS:]
-        else:
+        if len(full) <= _MAX_CHARS:
             report_content = full
+        else:
+            head = full[:_HALF]
+            tail = full[-_HALF:]
+            omitted = len(full) - _MAX_CHARS
+            report_content = (
+                head
+                + f"\n\n[...{omitted} chars omitted — showing head and tail...]\n\n"
+                + tail
+            )
         user_prompt = self._build_user_prompt(
             raw_inputs, spatial_info, temporal_info,
             "Full Report Content", report_content,

@@ -119,10 +119,16 @@ class HandcraftedGraph:
         tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
         self.phase_state.reset()
 
-        for phase in self.phases:
-            self.phase_state.set_phase(phase.name)
-            logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
-            await self._execute_phase(input, phase, max_tries, max_time)
+        total_rounds = sum(p.max_rounds for p in self.phases)
+        overall_pbar = tqdm(total=total_rounds, desc="Report progress", unit="round", leave=True)
+
+        try:
+            for phase in self.phases:
+                self.phase_state.set_phase(phase.name)
+                logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
+                await self._execute_phase(input, phase, max_tries, max_time, overall_pbar)
+        finally:
+            overall_pbar.close()
 
         report = ReportState.instance().content
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
@@ -140,6 +146,7 @@ class HandcraftedGraph:
         phase: PhaseConfig,
         max_tries: int,
         max_time: int,
+        overall_pbar: Optional[tqdm] = None,
     ) -> None:
         scheduler = RoundScheduler(
             nodes=self.nodes,
@@ -157,11 +164,18 @@ class HandcraftedGraph:
                 topology, round_idx, task_input=input
             )
 
+            if overall_pbar is not None:
+                overall_pbar.set_description(
+                    f"[{phase.name.value.upper():8}] round {round_idx + 1}/{phase.max_rounds}"
+                )
+
             if not active_agents:
                 logger.info(
                     f"Phase '{phase.name.value}' ended early at round {round_idx} "
                     f"(no active agents)."
                 )
+                if overall_pbar is not None:
+                    overall_pbar.update(1)
                 break
 
             logger.info(
@@ -182,6 +196,9 @@ class HandcraftedGraph:
             self._update_memory()
             self._clear_spatial()
             self.phase_state.increment_round()
+
+            if overall_pbar is not None:
+                overall_pbar.update(1)
 
     async def _execute_round(
         self,

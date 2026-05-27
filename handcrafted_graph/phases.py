@@ -152,13 +152,15 @@ DRAFTING_PHASE = PhaseConfig(
     max_rounds=10,
     next_phase=PhaseType.REVIEW,
     round_topologies=[
-        # Round A: LeadArchitect designates the section, DataAnalyst structures content.
+        # Round A: LeadArchitect designates the section, Researcher fetches fresh RAG
+        # context, DataAnalyst structures content. Researcher is required so DataAnalyst
+        # always has a RAG anchor before synthesising — prevents fabricated numbers.
         RoundTopology(
-            required_agents=["LeadArchitect", "DataAnalyst"],
-            optional_agents=["Researcher"],
+            required_agents=["LeadArchitect", "Researcher", "DataAnalyst"],
+            optional_agents=[],
             edges=[
                 ("LeadArchitect", "DataAnalyst"),  # Section directive
-                ("Researcher", "DataAnalyst"),     # Optional gap-filling evidence
+                ("Researcher", "DataAnalyst"),     # RAG evidence for this section
             ],
         ),
         # Round B: DataAnalyst (+ optional Researcher top-up) feeds Collector to write.

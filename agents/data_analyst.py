@@ -19,9 +19,11 @@ class DataAnalyst(Node):
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
+        section_list = self.report.list_sections()
+        report_context = f"Sections written so far:\n{section_list}\n\nProgress summary:\n{self.report.progress}"
         user_prompt = self._build_user_prompt(
             raw_inputs, spatial_info, temporal_info,
-            "Current report state", self.report.progress,
+            "Current report state", report_context,
             **kwargs,
         )
         return system_prompt, user_prompt
