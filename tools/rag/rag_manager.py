@@ -114,7 +114,7 @@ class RAGManager:
             embedding_function=self.emb_fn
         )
 
-    def query_docs(self, query_text, n_results=3):
+    def query_docs(self, query_text, n_results=2):
         results = self.collection.query(
             query_texts=[query_text],
             n_results=n_results

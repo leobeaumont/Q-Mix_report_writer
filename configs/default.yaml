@@ -45,3 +45,9 @@ agent_configs:
       DataAnalyst: http://localhost:11434
       Reviewer: http://localhost:11434
       Collector: http://localhost:11434
+    respective_max_tokens:
+      # Ceilings derived from handcrafted_trace.json response length analysis + 10% margin.
+      # Other agents (Reviewer, Collector) keep the global max_tokens (4096).
+      LeadArchitect: 250   # observed max ~104 tokens; tight ceiling, loop-prevention critical
+      Researcher: 600      # observed max ~471 tokens; safety layer, loops unlikely
+      DataAnalyst: 600     # observed max ~479 tokens; safety layer, loops unlikely

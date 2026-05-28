@@ -166,7 +166,7 @@ class HandcraftedGraph:
 
             if overall_pbar is not None:
                 overall_pbar.set_description(
-                    f"[{phase.name.value.upper():8}] round {round_idx + 1}/{phase.max_rounds}"
+                    f"[{phase.name.value.upper()}] round {round_idx + 1}/{phase.max_rounds}"
                 )
 
             if not active_agents:

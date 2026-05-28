@@ -32,6 +32,17 @@ def _get_ollama_endpoint(calling_agent: Optional[str] = None) -> str:
     return _build_ollama_endpoint(base_url)
 
 
+def _get_agent_max_tokens(calling_agent: Optional[str], default: int) -> int:
+    """Return per-agent max_tokens from respective_max_tokens config, or the default."""
+    if calling_agent:
+        config = get_config()
+        agent_config = config.get("agent_configs", {}).get("redacting", {})
+        per_agent = agent_config.get("respective_max_tokens", {})
+        if calling_agent in per_agent:
+            return int(per_agent[calling_agent])
+    return default
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
 async def achat_ollama(
     model_name: str,
@@ -43,6 +54,7 @@ async def achat_ollama(
 ) -> str:
     """Send a query to a LLM using oLLama."""
     endpoint = _get_ollama_endpoint(calling_agent)
+    max_tokens = _get_agent_max_tokens(calling_agent, max_tokens)
     headers = {
         "Content-Type": "application/json",
     }
@@ -52,6 +64,8 @@ async def achat_ollama(
         "stream": False,
         "max_tokens": max_tokens,
         "options": {"frequency_penalty": 0.6,   # Discourage repeating the exact same phrases
+                    "repeat_penalty": 1.2,        # Penalise token-level repetition loops
+                    "repeat_last_n": 64,          # Repetition window in tokens
                     "temperature": temperature}
     }
 
