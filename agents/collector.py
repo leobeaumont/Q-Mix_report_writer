@@ -101,8 +101,7 @@ class Collector(Node):
             section_id = self._extract_section_id(spatial_info)
             if section_id and self.report.replace_section(section_id, response1):
                 self.report.progress = response2
-            else:
-                self.report.append(response1, response2, new_sources)
+            # If section_id is missing or not found, do nothing
         else:
             self.report.append(response1, response2, new_sources)
         if execution_trace:
@@ -134,8 +133,8 @@ class Collector(Node):
             section_id = self._extract_section_id(spatial_info)
             if section_id and self.report.replace_section(section_id, response1):
                 self.report.progress = response2
-            else:
-                self.report.append(response1, response2, new_sources)
+            # If section_id is missing or not found, do nothing — appending would
+            # corrupt the report by leaving the old section and adding a duplicate.
         else:
             self.report.append(response1, response2, new_sources)
         if execution_trace:

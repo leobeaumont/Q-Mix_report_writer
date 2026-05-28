@@ -61,7 +61,7 @@ class ReportState(Singleton):
         title = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
         section_id = f"section_{len(self.sections) + 1}"
         self.sections.append({"id": section_id, "title": title, "content": text})
-        self.content += text       # backward compat: raw concatenation unchanged
+        self.content = "\n\n".join(s["content"] for s in self.sections)
         self.additions.append(text)
         self.progress = progress
         if new_sources is not None:
