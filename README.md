@@ -99,18 +99,21 @@ Technical changes:
 - Creation of `append` and `terminate` actions.
 - Removed `debate` and `execute_verify` actions.
 - Created a copy of `selective_query` action for each agent. This way Q-Mix can choose the interlocutor by using the corresponding version of the action. This means Q-Mix has a pool of $5 + N$ actions where $N$ is the number of agents.
-- When multiple agents try using the `append` action on the same turn, only the highest ID agent can append.
+- Multiple agents may choose the `append` action in the same round; all of them get a spatial edge to the `Collector`, which processes every incoming message.
 - Creation of the `collector` node that receives the output of the agents choosing the `append` action.
 - The `collector` is a normal node like other agents, but it can't use any action.
-- The `collector` node makes sure the text is formatted correctly and no LLM remnants are passed into the report.
+- The `terminate` action ends the round loop only when a **majority** of the acting agents vote for it (threshold: `>= n_acting / 2` votes). A single agent voting `terminate` is not enough.
+- The `Collector` makes **two sequential LLM calls** per append: the first generates the polished prose to add to the report, the second (using a dedicated "Summarizer" role prompt) rewrites the progress summary so all agents have an up-to-date picture of what has been written.
+- The `Collector` silently skips execution when its `spatial_info` is empty (no agent sent it a message that round) or when the `DataAnalyst`'s entire message consists only of absence markers (`State Deficiency`, `absent`, `not found`, etc.). This prevents meta-commentary about missing evidence from ever reaching the report.
 - When an agent choose the `append` action, its prompt informs it that its output will be added to the report.
 - The verification to avoid graph cycles is still present and gives messaging priority to lower indices agents.
-- When an agent action is denied because of an append lock or a cycle, its action is defaulted to `solo_process`.
+- When an agent action is denied because of a cycle, its action is defaulted to `solo_process`.
 - Changed Kahn's algorithm in `graph/graph.py: _execute_round` method to accept self edge and mutual edge.
 - Modified Q-Mix to only train and select actions for the 5 acting agents, while ignoring the `collector` node.
-- Added a dynamic `ReportState` singleton to track the report text, sources and a progress summary. The report state is updated by the `Collector` agents and the summary of progress is given as context to other agents.
+- Added a dynamic `ReportState` singleton to track the report text, sources and a progress summary. Internally, the report is stored as a structured list of sections, each with a unique `section_id`, a `title` (inferred from the first Markdown heading), and its `content`. This allows targeted in-place replacement via `replace_section(section_id, new_content)` and a formatted section index via `list_sections()`, both used during the review and revision flow. The report state is updated by the `Collector` agent and the summary of progress is given as context to other agents.
 - The report state summary is embedded inside of the observation features as context for the Q-Mixer.
 - `Lead Architect` now define a `Current Team Objective` to help the team separate the goal of the round from the global report subject. This aims to help the agents decompose the task into small trivial parts.
+- Added a deterministic post-processing filter (`utils/report_filter.py`) applied to the final report before it is returned to the caller. The filter works at sentence level and removes any sentence containing pipeline-internal jargon (`State Deficiency`, `data atoms`, `evidence atoms`, `RAG Tool`, `RAG results`, internal variable names, etc.) as well as section-transition sentences that reference "the next/following/subsequent section". No LLM call is made; only unambiguous pipeline-internal patterns are removed so that legitimate scientific prose is left untouched.
 
 ### From a `post-process` to `in real time` reward system
 
@@ -126,9 +129,9 @@ Technical changes:
 - `Macro Scoring` judge is responsible for: subject coverage, flow, structure, tone and avoiding repetition.
 - The reward is now computed after every `append` action, because the changes in the report cause changes in the report `score` and `token goal` completion.
 - All rounds between the previous `append` round and the current `append` round receive an even fraction of the reward. This is done to reward all the rounds that lead to a good `append` to the the report and not only the round where the `append` action occurs. The reward is shared between rounds to motivate the model to be efficient (i.e.: get to a high quality `append` action in as few rounds as possible).
-- Added a `Score` and `TokenGoal` sigletons to track their current respective value, but also the previous one. This way a `get_delta()` method can be called on them to get the difference between their current and their last value.
+- Added a `Score` and `LengthGoal` singletons to track their current respective value, but also the previous one. This way a `get_delta()` method can be called on them to get the difference between their current and their last value.
 - Changed the training pipeline to compute the reward after each `append` action.
-- Added a `step buffer` to propagate the reward to all the round that lead to the `append` action. The reward is evenly spread between all action to reward the whole process of creation.
+- Added a `step buffer` to propagate the reward to all the rounds that lead to the `append` action. The reward is evenly spread between all actions to reward the whole process of creation. Any steps remaining in the buffer at the end of an episode (i.e. after the last `append`) are flushed to the episode with `team_reward = 0`.
 - Added a `length scorer` based on a Gausian curve centered at $\mu = 25000$ and $\sigma = 8500$ with a peak of height 1. The goal of 25000 character correspond to ~4500 words which is the average length of scientific documents. The value of $\sigma$ is set to 8500 to start giving a good reward signal at around 5000 characters.
 - Added a `report scorer` based on the 2 `LLM judges` described earlier.
     - The `Macro` judge is prompted to analyze the whole report with only a prompt and the report as context.
@@ -173,3 +176,36 @@ Technical changes:
 - On the graph each agent is represented by a `Node`. The communication are represented by `Edges`.
 - The `timeline` of the exectuion is represented by a `slide bar`, and the active agent and communications at a specific execution step are highlighted for clarity. The information on the active agent is displayed to the right of the graph, alongside the state of the report at that current step.
 - The `play` button lets the user observ the graph evolution by going through steps automatically at a rapid pace.
+
+### Handcrafted graph baseline
+
+The `handcrafted_graph/` module implements a deterministic, phase-ordered pipeline as a structural baseline for the QMIX-trained approach. It reuses the existing `Node`, `AgentRegistry`, and `Collector` infrastructure entirely unchanged, replacing only the action-selection mechanism: instead of the QMIX mixer choosing actions each round, the communication topology is hand-designed and executed in a fixed sequence of phases. This makes it possible to run and evaluate the report-writing pipeline without any RL training.
+
+**Pipeline overview:**
+
+The pipeline is divided into 5 ordered phases. Each phase defines one or more round patterns that cycle until the phase's maximum round count is reached.
+
+| Phase | Max rounds | Purpose |
+|-------|-----------|---------|
+| PLANNING | 2 | Evidence-first outline. Researcher scans corpus coverage before LeadArchitect commits to any section titles. |
+| RESEARCH | 6 | Iterative evidence gathering. LeadArchitect directs Researcher with specific queries; DataAnalyst synthesises raw evidence atoms into structured writing blueprints. |
+| DRAFTING | 10 | Section-by-section writing. LeadArchitect designates the section; DataAnalyst structures content; Collector writes and appends polished prose to the report. |
+| REVIEW | 2 | Reviewer audits the full draft for factual accuracy, logical coherence, and scientific rigour, then forwards structured critique to LeadArchitect. |
+| REVISION | 4 | LeadArchitect applies reviewer feedback. DataAnalyst prepares corrected content; Collector replaces flagged sections in-place (not append). |
+
+**Technical changes:**
+
+- Created `handcrafted_graph/` module with the following components:
+    - `graph.py` — `HandcraftedGraph` class. Orchestrates phase-based execution: iterates over phases, builds the spatial edge topology for each round from the phase definition, runs Kahn's topological sort (identical tie-breaking logic as `QMIXGraph`), and returns the finished report from `ReportState`.
+    - `phases.py` — `PhaseType` enum, `RoundTopology` dataclass (required agents, optional agents, directed edge list) and `PhaseConfig` dataclass (name, description, round patterns, max rounds, next phase). Defines the complete `PHASE_SEQUENCE` and `PHASE_MAP` constants.
+    - `scheduler.py` — `RoundScheduler` class with three `SkipStrategy` modes for optional agents: `ALWAYS_INCLUDE` (safest, highest token cost), `TEMPORAL_HEURISTIC` (include agent only if it has produced output in a prior round), and `LLM_GATECHECK` (single lightweight LLM call ~50 tokens asking the agent "EXECUTE or SKIP?" before its full execution). `LLM_GATECHECK` falls back to `TEMPORAL_HEURISTIC` automatically when no LLM instance is provided.
+    - `state.py` — `PhaseState` singleton tracking the current `PhaseType` and the round index within the active phase. Agents and the prompt set read from it to tailor their behaviour without requiring it to be threaded through every call.
+    - `prompts/handcrafted_prompt_set.py` — `HandcraftedPromptSet` registered under the key `"handcrafted_redacting"`. Wraps the existing `redacting_prompt_set` role descriptions and constraints, and dynamically injects: (1) a phase context block into the system prompt, and (2) a per-`(phase, role)` objective and current round number into the user-prompt context block. REVIEW and REVISION phases additionally inject the live section ID list from `ReportState.list_sections()` so agents can target corrections precisely.
+    - `runner.py` — `run_handcrafted()` async function mirroring the QMIX runner interface. Resets all singletons before each run, constructs `HandcraftedGraph`, applies `filter_meta_commentary()` to the final output, and optionally saves the execution trace to `handcrafted_trace.json`.
+- Added `experiments/run_handcrafted.py` as a standalone CLI entry point. Accepts `--task`, `--task-index`, `--llm`, `--skip-strategy`, `--trace`, `--max-tries`, and `--max-time` arguments.
+- Spatial edges are cleared and rebuilt from scratch every round according to the current phase topology. Temporal self-edges are re-wired each round: a node that has prior-round output receives its own last output as a temporal predecessor (giving agents memory without an explicit state store).
+- Round patterns within a phase cycle: if a phase has N patterns and `max_rounds > N`, pattern `round_idx % N` is selected, so the alternating topology repeats until the phase ends.
+- The execution trace format exactly mirrors `QMIXGraph`, with `action=None` for all agents (no QMIX action is selected). This means the existing `StandaloneVisualizer` in `utils/visualization.py` works without any modification on handcrafted traces.
+- REVISION Collector performs an in-place section replacement instead of an append. DataAnalyst prefixes its output with a `[SECTION_ID: section_X]` tag so the Collector knows exactly which section to overwrite.
+- Strong anti-hallucination guardrails are embedded directly in the phase-role prompts: Researcher signals `"State Deficiency"` when the knowledge base lacks requested data; DataAnalyst propagates the signal and emits `REMOVE:` directives for unverifiable claims; Collector omits those claims entirely — an empty section is preferred over speculative prose.
+- `PhaseState` is fully reset between runs via `runner._reset_singletons()`.
