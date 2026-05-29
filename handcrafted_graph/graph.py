@@ -245,6 +245,7 @@ class HandcraftedGraph:
                 continue
 
             t0 = time.time()
+            tokens_before = CompletionTokens.instance().value
             for attempt in range(max_tries):
                 try:
                     await asyncio.wait_for(
@@ -266,9 +267,11 @@ class HandcraftedGraph:
 
             if self.execution_trace is not None:
                 elapsed = round(time.time() - t0)
+                tokens_used = int(CompletionTokens.instance().value - tokens_before)
                 agent_name = self.nodes[current_id].agent_name
                 if agent_name in self.execution_trace.trace[-1]:
                     self.execution_trace.trace[-1][agent_name]["time"] = elapsed
+                    self.execution_trace.trace[-1][agent_name]["completion_tokens"] = tokens_used
                 self.execution_trace.trace[-1]["exec_order"].append(agent_name)
 
             # Unlock successors.
@@ -349,6 +352,7 @@ class HandcraftedGraph:
                 "prompt": None,
                 "response": None,
                 "time": None,
+                "completion_tokens": None,
             }
             for name in self.agent_names
         }

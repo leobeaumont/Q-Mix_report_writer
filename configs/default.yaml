@@ -46,8 +46,9 @@ agent_configs:
       Reviewer: http://localhost:11434
       Collector: http://localhost:11434
     respective_max_tokens:
-      # Ceilings derived from handcrafted_trace.json response length analysis + 10% margin.
+      # Ceilings cover thinking tokens + output tokens (qwen3 thinking overhead ~200-400t).
+      # Calibrated to cut runaway loops (~4000t in trace 1) while allowing normal operation.
       # Other agents (Reviewer, Collector) keep the global max_tokens (4096).
-      LeadArchitect: 250   # observed max ~104 tokens; tight ceiling, loop-prevention critical
-      Researcher: 600      # observed max ~471 tokens; safety layer, loops unlikely
-      DataAnalyst: 600     # observed max ~479 tokens; safety layer, loops unlikely
+      LeadArchitect: 1500
+      Researcher: 1200     # output max ~471t + thinking overhead → 1200
+      DataAnalyst: 1200    # output max ~479t + thinking overhead → 1200

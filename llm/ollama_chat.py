@@ -1,6 +1,5 @@
 import aiohttp
 from typing import List, Union, Optional, Dict
-from tenacity import retry, wait_random_exponential, stop_after_attempt
 
 from .format import Message
 from .llm import LLM
@@ -43,7 +42,6 @@ def _get_agent_max_tokens(calling_agent: Optional[str], default: int) -> int:
     return default
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
 async def achat_ollama(
     model_name: str,
     messages: list,
@@ -63,9 +61,7 @@ async def achat_ollama(
         "messages": [m.to_dict() if isinstance(m, Message) else m for m in messages],
         "stream": False,
         "max_tokens": max_tokens,
-        "options": {"frequency_penalty": 0.6,   # Discourage repeating the exact same phrases
-                    "repeat_penalty": 1.2,        # Penalise token-level repetition loops
-                    "repeat_last_n": 64,          # Repetition window in tokens
+        "options": {"frequency_penalty": 0.6,  # Discourage repeating the exact same phrases
                     "temperature": temperature}
     }
 
@@ -101,8 +97,20 @@ async def achat_ollama(
             PromptTokens.instance().value += usage.get("prompt_tokens", 0)
             CompletionTokens.instance().value += usage.get("completion_tokens", 0)
 
-            msg = response_data["choices"][0]["message"]
+            choice = response_data["choices"][0]
+            msg = choice["message"]
             completion = msg.get("content") or ""
+            if not completion.strip():
+                finish_reason = choice.get("finish_reason", "unknown")
+                completion_tokens = usage.get("completion_tokens", "unknown")
+                print(f"[DEBUG empty response] finish_reason={finish_reason}, "
+                      f"completion_tokens={completion_tokens}, msg_keys={list(msg.keys())}, "
+                      f"msg={msg}")
+                raise ValueError(
+                    f"Empty response from model "
+                    f"(finish_reason={finish_reason}, "
+                    f"completion_tokens={completion_tokens})"
+                )
             return completion
 
 
