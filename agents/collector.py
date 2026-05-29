@@ -3,7 +3,8 @@ import re
 # Patterns that mark an evidence item as absent/unavailable from the knowledge base.
 # Used by _data_analyst_has_content() to decide whether to silence the Collector.
 _ABSENCE_RE = re.compile(
-    r'\b(?:State Deficiency|absent|not found|no definition|no data|unavailable|Term absent)\b',
+    r'\b(?:State Deficiency|absent|not found|no definition|no data|unavailable|Term absent)\b'
+    r'|\[NO NEW EVIDENCE\]|\[WAITING_FOR_DIRECTIVE\]|\[NO SUPPORTED CONTENT\]',
     re.IGNORECASE,
 )
 

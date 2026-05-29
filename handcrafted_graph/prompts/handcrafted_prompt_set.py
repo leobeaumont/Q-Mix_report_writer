@@ -70,11 +70,10 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "ONLY plan sections for topics the Researcher explicitly confirmed are present "
         "in the knowledge base — do not invent sections around topics not mentioned. "
         "Each section entry must have a title and a one-sentence scope statement. "
-        "End by setting the team's first section target. "
-        "IMPORTANT: In PLANNING phase, outputting the complete numbered section list "
-        "IS the single atomic output — it overrides the 'never list tasks' constraint. "
-        "If your previous output already contains the full outline, do NOT rebuild it — "
-        "simply confirm the first section target in one sentence and stop."
+        "IMPORTANT: Round 1 of PLANNING only — output the complete numbered section list "
+        "as your entire output; this overrides the 'never list tasks' constraint. "
+        "Round 2+ of PLANNING — the outline is already stored; do NOT rebuild it. "
+        "In every PLANNING round, end by naming the first section target in one sentence."
     ),
     (PhaseType.PLANNING, "Researcher"): (
         "Perform a broad coverage scan of the knowledge base. "
@@ -95,8 +94,10 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
     ),
     (PhaseType.RESEARCH, "Researcher"): (
         "Execute a targeted RAG query using the LeadArchitect's directive. "
-        "Return raw evidence atoms with source attribution. "
-        "Signal 'State Deficiency' if the knowledge base lacks the requested data."
+        "Return ALL relevant evidence atoms you found, with source attribution — "
+        "do not withhold evidence you already have. "
+        "Signal 'State Deficiency: [specific item]' only for sub-items that are "
+        "completely absent from RAG results, after reporting what you did find."
     ),
     (PhaseType.RESEARCH, "Data Analyst"): (
         "Synthesise the Researcher's evidence atoms into a structured Markdown list "
@@ -121,18 +122,17 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "output only `[DRAFTING_COMPLETE]` and nothing else."
     ),
     (PhaseType.DRAFTING, "Data Analyst"): (
-        "Synthesize ONLY what the Researcher provided in this round into a dense "
+        "Synthesize the Researcher's evidence from '### Received messages' into a dense "
         "structured Markdown list of claims, data points, and citations, scoped strictly "
-        "to the current LeadArchitect directive. Do not cross-reference previous sections "
-        "or infer content from prior rounds — the Collector handles deduplication. "
+        "to the current LeadArchitect directive. "
         "CRITICAL: Do NOT generate specific numerical values (percentages, µs latencies, "
         "ratios, correlation coefficients, thresholds) unless they appear verbatim in "
-        "the Researcher's current message. If a metric is absent, write "
+        "the Researcher's message. If a metric is absent, write "
         "'State Deficiency: [metric name]' — never substitute a plausible-sounding number. "
         "CRITICAL: If the current team objective is a placeholder rather than a real "
         "section title (e.g., 'NEXT_SECTION_ASSIGNMENT'), output only "
         "`[WAITING_FOR_DIRECTIVE]` and nothing else. "
-        "CRITICAL: If the Researcher's current message contains no evidence "
+        "CRITICAL: If the Researcher's message contains no evidence "
         "(only State Deficiency entries), output only `[NO NEW EVIDENCE]` and nothing else."
     ),
     (PhaseType.DRAFTING, "Researcher"): (

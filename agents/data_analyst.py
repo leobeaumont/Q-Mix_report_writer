@@ -22,7 +22,7 @@ class DataAnalyst(Node):
         section_list = self.report.list_sections()
         report_context = f"Sections written so far:\n{section_list}\n\nProgress summary:\n{self.report.progress}"
         user_prompt = self._build_user_prompt(
-            raw_inputs, spatial_info, temporal_info,
+            raw_inputs, spatial_info, {},
             "Current report state", report_context,
             **kwargs,
         )
