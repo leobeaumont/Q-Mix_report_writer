@@ -3,7 +3,6 @@ from typing import List, Union, Optional, Dict
 
 from .format import Message
 from .llm import LLM
-from .llm_registry import LLMRegistry
 from utils.config import get_llm_config, get_config
 from utils.globals import PromptTokens, CompletionTokens
 
@@ -27,7 +26,7 @@ def _get_ollama_endpoint(calling_agent: Optional[str] = None) -> str:
         if base_url:
             return _build_ollama_endpoint(base_url)
     llm_config = get_llm_config()
-    base_url = llm_config.get("ollama_base_url", "http://localhost:11434")
+    base_url = llm_config.get("providers", {}).get("ollama", {}).get("base_url", "http://localhost:11434")
     return _build_ollama_endpoint(base_url)
 
 
@@ -46,7 +45,10 @@ async def achat_ollama(
     model_name: str,
     messages: list,
     max_tokens: int = 4096,
-    temperature: float = 0.4,
+    temperature: float = 0.7,
+    top_p: float = 0.8,
+    top_k: int = 20,
+    min_p: float = 0.0,
     response_schema: Optional[Dict] = None,
     calling_agent: Optional[str] = None,
 ) -> str:
@@ -61,8 +63,13 @@ async def achat_ollama(
         "messages": [m.to_dict() if isinstance(m, Message) else m for m in messages],
         "stream": False,
         "max_tokens": max_tokens,
-        "options": {"frequency_penalty": 0.6,  # Discourage repeating the exact same phrases
-                    "temperature": temperature}
+        "options": {
+            "frequency_penalty": 0.6,  # Discourage repeating the exact same phrases
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+        }
     }
 
     if response_schema:
@@ -114,15 +121,15 @@ async def achat_ollama(
             return completion
 
 
-# Register your locally available Ollama models here.
-# The name must match exactly what you have pulled in Ollama (run `ollama list` to check).
-@LLMRegistry.register("tinyllama")
-@LLMRegistry.register("qwen3:8b")
-@LLMRegistry.register("qwen3:4b")
 class OllamaChat(LLM):
-    def __init__(self, model_name: str, temperature: float = 0.2, max_tokens: int = 1024, response_schema: Optional[Dict] = None):
+    def __init__(self, model_name: str, temperature: float = 0.7, top_p: float = 0.8,
+                 top_k: int = 20, min_p: float = 0.0, max_tokens: int = 4096,
+                 response_schema: Optional[Dict] = None):
         self.model_name = model_name
         self._temperature = temperature
+        self._top_p = top_p
+        self._top_k = top_k
+        self._min_p = min_p
         self._max_tokens = max_tokens
         self._response_schema = response_schema
 
@@ -139,7 +146,7 @@ class OllamaChat(LLM):
             max_tokens = self._max_tokens
         if temperature is None:
             temperature = self._temperature
-        if response_schema is None: 
+        if response_schema is None:
             response_schema = self._response_schema
 
         if isinstance(messages, str):
@@ -152,6 +159,9 @@ class OllamaChat(LLM):
             messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=self._top_p,
+            top_k=self._top_k,
+            min_p=self._min_p,
             response_schema=response_schema,
             calling_agent=calling_agent
         )

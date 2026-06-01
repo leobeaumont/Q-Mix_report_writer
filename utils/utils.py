@@ -7,24 +7,34 @@ def safe_json_parse(text):
     """Clean markdown and attempt to fix truncated JSON."""
     if not text:
         return {}
-    
-    # 1. Strip Markdown code blocks if they exist
+
+    # 1. Strip markdown code fences
     text = re.sub(r"```json\s*|\s*```", "", text).strip()
-    
+
+    # 2. Direct parse (happy path)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # 2. Attempt to close an unterminated string/object
-        if text.count('"') % 2 != 0:
-            text += '"'
-        if not text.endswith("}"):
-            text += "}"
-        
+        pass
+
+    # 3. Model added preamble/postamble — find the first { ... } block
+    json_match = re.search(r"\{.*\}", text, re.DOTALL)
+    if json_match:
         try:
-            return json.loads(text)
-        except:
-            print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
-            return {}
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # 4. Last resort: try to close an unterminated object
+    if text.count('"') % 2 != 0:
+        text += '"'
+    if not text.endswith("}"):
+        text += "}"
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
+        return {}
 
 def extract_number(text: str) -> Optional[float]:
     """Extract the last number from text (for math answers)."""

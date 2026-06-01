@@ -1,8 +1,9 @@
+import re
+
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
 from utils.globals import ReportState
-from utils.utils import safe_json_parse
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -31,41 +32,37 @@ class LeadArchitect(Node):
         )
         return system_prompt, user_prompt
 
+    def _parse_response(self, response: str):
+        match = re.search(r"<task>(.*?)</task>", response, re.DOTALL)
+        current_task = match.group(1).strip() if match else "Continue developing the report based on the current plan."
+        strategy = re.sub(r"<task>.*?</task>", "", response, flags=re.DOTALL).strip()
+        return current_task, strategy
+
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        schema = self.prompt_set.get_schema(self.role)
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message, response_schema=schema, calling_agent="LeadArchitect")
+        response = self.llm.gen(message, calling_agent="LeadArchitect")
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["response"] = response
-        response = safe_json_parse(response)
-        current_task = response.get("current_task", "")
-        self.report.task = current_task or self.report.task
-        strategy = response.get("strategy", "")
-        if current_task:
-            return f"{strategy}\n\n**Assigned task:** {current_task}"
-        return strategy
+        current_task, strategy = self._parse_response(response)
+        self.report.task = current_task
+        return f"{strategy}\n\n**Assigned task:** {current_task}"
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        schema = self.prompt_set.get_schema(self.role)
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = await self.llm.agen(message, response_schema=schema, calling_agent="LeadArchitect")
+        response = await self.llm.agen(message, calling_agent="LeadArchitect")
         if execution_trace:
             execution_trace.trace[-1]["LeadArchitect"]["response"] = response
-        response = safe_json_parse(response)
-        current_task = response.get("current_task", "")
-        self.report.task = current_task or self.report.task
-        strategy = response.get("strategy", "")
-        if current_task:
-            return f"{strategy}\n\n**Assigned task:** {current_task}"
-        return strategy
+        current_task, strategy = self._parse_response(response)
+        self.report.task = current_task
+        return f"{strategy}\n\n**Assigned task:** {current_task}"
 
 if __name__ == "__main__":
     input_arg = {"task": "write a report"}

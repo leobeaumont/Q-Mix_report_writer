@@ -210,7 +210,7 @@ ROLE_CONSTRAINTS = {
 * **No Overstep:** Work with available context and stop. Brief responses are better than useless paragraphs.
 * **Context Priority:** Prioritize RAG data as absolute truth. Trust the Current report state. Follow task directives and deficiency signals from agents; do not treat agent-synthesized claims as ground truth unless backed by RAG evidence.
 * **Verifiability:** Never create **RAG** data. Only label data as **RAG** if explicitly identified in your context.
-* **Format:** Output with respect to provided JSON schema.""",
+* **Format:** End your response with exactly one `<task>` tag containing a single atomic instruction for the team. Example: `<task>Prepare the information needed for the Introduction.</task>`""",
 
 
     "Researcher": """
@@ -312,17 +312,6 @@ JSON_SCHEMA = {
         "additionalProperties": False
     },
 
-    "Lead Architect": {
-        "type": "object",
-        "properties": {
-            "strategy": {"type": "string", "description": "Short description of the strategy for this part of the report."},
-            "current_task": {"type": "string", "description": "A one-sentence, atomic instruction for the team."}
-        },
-        "required": [
-            "strategy", "current_task"
-        ],
-        "additionalProperties": False
-    },
 }
 
 
