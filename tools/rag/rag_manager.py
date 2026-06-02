@@ -10,6 +10,12 @@ from typing import List, Dict, Optional, Tuple
 from utils.config import get_llm_config
 
 try:
+    from rank_bm25 import BM25Okapi
+    _BM25_AVAILABLE = True
+except ImportError:
+    _BM25_AVAILABLE = False
+
+try:
     from pypdf import PdfReader
 except ImportError:
     PdfReader = None
@@ -116,6 +122,12 @@ class RAGManager:
         self._reranker_tokenizer = None
         self._reranker_model_name = "BAAI/bge-reranker-base"
 
+        self._bm25: Optional[object] = None
+        self._bm25_ids: List[str] = []
+        self._bm25_texts: List[str] = []
+        self._bm25_metas: List[Dict] = []
+        self._build_bm25_index()
+
     def _embed_one(self, base_url: str, text: str) -> List[float]:
         """Embed a single text, truncating to _EMBED_MAX_CHARS if needed."""
         payload = json.dumps(
@@ -137,6 +149,51 @@ class RAGManager:
         """
         base_url = _get_ollama_base_url().rstrip("/")
         return [self._embed_one(base_url, text) for text in texts]
+
+    def _build_bm25_index(self) -> None:
+        """Build an in-memory BM25 index from the current ChromaDB collection."""
+        if not _BM25_AVAILABLE:
+            return
+        all_data = self.collection.get()
+        texts = all_data.get("documents") or []
+        self._bm25_ids = all_data.get("ids") or []
+        self._bm25_texts = texts
+        self._bm25_metas = all_data.get("metadatas") or []
+        self._bm25 = BM25Okapi([t.lower().split() for t in texts]) if texts else None
+
+    def _get_candidates_bm25(self, query: str, n_candidates: int) -> List[Dict]:
+        """Return top-n BM25 candidates for a query, excluding zero-score results."""
+        if self._bm25 is None:
+            return []
+        scores = self._bm25.get_scores(query.lower().split())
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:n_candidates]
+        return [
+            {
+                "content": self._bm25_texts[i],
+                "source": self._bm25_metas[i].get("source_name", "Unknown Source"),
+                "page": self._bm25_metas[i].get("page_number", "N/A"),
+                "distance": None,
+                "id": self._bm25_ids[i],
+            }
+            for i in top_indices
+            if scores[i] > 0
+        ]
+
+    def _rrf_merge(self, *candidate_lists: List[Dict], k: int = 60) -> List[Dict]:
+        """Reciprocal Rank Fusion across any number of ranked candidate lists.
+
+        score(d) = Σ  1 / (k + rank_i(d) + 1)
+        k=60 is the standard constant from the original RRF paper.
+        """
+        scores: Dict[str, float] = {}
+        by_id: Dict[str, Dict] = {}
+        for candidates in candidate_lists:
+            for rank, c in enumerate(candidates):
+                cid = c["id"]
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
+                if cid not in by_id:
+                    by_id[cid] = c
+        return [by_id[cid] for cid in sorted(scores, key=scores.__getitem__, reverse=True)]
 
     def _rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
         if self._reranker is None:
@@ -183,27 +240,27 @@ class RAGManager:
 
     def query_docs(self, query_text: str, n_candidates: int = 15, top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
         """
-        Two-stage retrieval: broad vector search → similarity filter → cross-encoder rerank.
+        Three-stage hybrid retrieval: vector search + BM25 → RRF merge → cross-encoder rerank.
 
-        n_candidates:       chunks fetched from ChromaDB (wide net)
+        n_candidates:       chunks fetched per retriever (wide net)
         top_k:              chunks returned after reranking (tight output)
-        distance_threshold: cosine distance ceiling (0=identical, 1=orthogonal)
+        distance_threshold: cosine distance ceiling for the vector path
         """
         count = self.collection.count()
         if count == 0:
             return []
-        candidates = self._get_candidates(query_text, min(n_candidates, count), distance_threshold)
-        if not candidates:
+        n = min(n_candidates, count)
+        vector_cands = self._get_candidates(query_text, n, distance_threshold)
+        bm25_cands = self._get_candidates_bm25(query_text, n)
+        merged = self._rrf_merge(vector_cands, bm25_cands)
+        if not merged:
             return []
-        return self._rerank(query_text, candidates, top_k)
+        return self._rerank(query_text, merged, top_k)
 
     def query_docs_multi(self, queries: List[str], top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
         """
-        Multi-query retrieval: gather candidates from each query, deduplicate by chunk ID, rerank.
-
-        queries:            list of semantically distinct search strings
-        top_k:              chunks returned after reranking
-        distance_threshold: cosine distance ceiling applied per query before merging
+        Multi-query hybrid retrieval: for each query run vector + BM25, RRF-merge per query,
+        then deduplicate across queries and cross-encoder rerank the final pool.
 
         The first query is used as the anchor for cross-encoder reranking.
         """
@@ -215,10 +272,12 @@ class RAGManager:
         seen_ids: set = set()
         merged: List[Dict] = []
         for query in queries:
-            for candidate in self._get_candidates(query, n_candidates, distance_threshold):
-                if candidate["id"] not in seen_ids:
-                    seen_ids.add(candidate["id"])
-                    merged.append(candidate)
+            vector_cands = self._get_candidates(query, n_candidates, distance_threshold)
+            bm25_cands = self._get_candidates_bm25(query, n_candidates)
+            for c in self._rrf_merge(vector_cands, bm25_cands):
+                if c["id"] not in seen_ids:
+                    seen_ids.add(c["id"])
+                    merged.append(c)
 
         if not merged:
             return []
@@ -238,6 +297,7 @@ class RAGManager:
             metadatas=metadatas,
             ids=ids
         )
+        self._build_bm25_index()
 
     def add_document_from_path(self, file_path: str, chunk_size: int = 512, overlap: int = 50) -> Dict:
         """
@@ -355,6 +415,7 @@ class RAGManager:
 
         if ids_to_delete:
             self.collection.delete(ids=ids_to_delete)
+            self._build_bm25_index()
             return {
                 "success": True,
                 "source_name": source_name,
@@ -381,6 +442,7 @@ class RAGManager:
 
         if ids:
             self.collection.delete(ids=ids)
+            self._build_bm25_index()
             return {
                 "success": True,
                 "message": "Collection cleared",
