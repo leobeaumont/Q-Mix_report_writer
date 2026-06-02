@@ -208,27 +208,31 @@ REVISION_PHASE = PhaseConfig(
     name=PhaseType.REVISION,
     description=(
         "LeadArchitect applies reviewer feedback. DataAnalyst prepares corrected "
-        "content; Collector appends the revised sections. Researcher may supply "
-        "additional evidence if the revision requires new sourcing."
+        "content and flags evidence gaps; Researcher retrieves missing evidence "
+        "when gaps are flagged; Collector rewrites the corrected section in-place."
     ),
     max_rounds=4,
     next_phase=None,  # End of pipeline
     round_topologies=[
-        # Round A: LeadArchitect directs targeted revision to DataAnalyst.
+        # Round A: LeadArchitect issues correction directive; DataAnalyst runs first
+        # and may flag evidence gaps; Researcher runs after (topological order enforced
+        # by the DataAnalyst→Researcher edge) and can read those gap flags directly.
         RoundTopology(
             required_agents=["LeadArchitect", "DataAnalyst"],
             optional_agents=["Researcher"],
             edges=[
-                ("LeadArchitect", "DataAnalyst"),  # Revision directive
-                ("Researcher", "DataAnalyst"),     # Optional new evidence
+                ("LeadArchitect", "DataAnalyst"),  # Correction directive
+                ("DataAnalyst", "Researcher"),     # Gap flags → Researcher reacts
             ],
         ),
-        # Round B: DataAnalyst feeds revised content to Collector.
+        # Round B: Researcher forwards retrieved evidence to DataAnalyst for final
+        # synthesis; Collector rewrites the flagged section in-place.
         RoundTopology(
             required_agents=["DataAnalyst", "Collector"],
-            optional_agents=[],
+            optional_agents=["Researcher"],
             edges=[
-                ("DataAnalyst", "Collector"),      # Revised section content
+                ("Researcher", "DataAnalyst"),     # Retrieved evidence (if any gaps)
+                ("DataAnalyst", "Collector"),      # Corrected final content
             ],
         ),
     ],

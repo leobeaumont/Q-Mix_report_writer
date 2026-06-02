@@ -197,7 +197,7 @@ Audit this specific chunk for technical truth, logic, and verifiability. Use the
 You are the query-formulation layer for a Scientific RAG system. Your goal is to translate the current mission requirements into a optimized search string for a Vector Database.
 
 ### Objective
-Identify the most relevant "Technical Primitives" (formulas, constants, experimental results, or methodology details) for the current task. Select at most 5–8 high-signal terms that best represent the target concept. Stop once you have enough terms; do not enumerate exhaustively.
+Identify the most relevant "Technical Primitives" (formulas, constants, experimental results, or methodology details) for the current task. Select at most 5-8 high-signal terms that best represent the target concept. Stop once you have enough terms; do not enumerate exhaustively.
 """
 }
 

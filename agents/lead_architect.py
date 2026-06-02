@@ -25,6 +25,20 @@ class LeadArchitect(Node):
         # model can reliably detect which topics have already been written.
         section_list = self.report.list_sections()
         report_context = f"Sections written so far:\n{section_list}\n\nProgress summary:\n{self.report.progress}"
+        # In PLANNING, surface any topics the Researcher confirmed are absent from
+        # the knowledge base so the LLM cannot accidentally plan sections for them.
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            if (
+                PhaseState.instance().current_phase == PhaseType.PLANNING
+                and self.report.deficient_topics
+            ):
+                absent_block = "\n\nTopics absent from knowledge base — do NOT plan sections for these:\n"
+                absent_block += "\n".join(f"- {t}" for t in self.report.deficient_topics)
+                report_context += absent_block
+        except Exception:
+            pass
         user_prompt = self._build_user_prompt(
             raw_inputs, spatial_info, temporal_info,
             "Current report state", report_context,
@@ -33,6 +47,12 @@ class LeadArchitect(Node):
         return system_prompt, user_prompt
 
     def _parse_response(self, response: str):
+        if "[DRAFTING_COMPLETE]" in response:
+            strategy = response.replace("[DRAFTING_COMPLETE]", "").strip()
+            return "[DRAFTING_COMPLETE]", strategy
+        if "[REVISION_COMPLETE]" in response:
+            strategy = response.replace("[REVISION_COMPLETE]", "").strip()
+            return "[REVISION_COMPLETE]", strategy
         match = re.search(r"<task>(.*?)</task>", response, re.DOTALL)
         current_task = match.group(1).strip() if match else "Continue developing the report based on the current plan."
         strategy = re.sub(r"<task>.*?</task>", "", response, flags=re.DOTALL).strip()

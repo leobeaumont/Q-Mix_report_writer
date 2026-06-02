@@ -1,4 +1,7 @@
+import logging
 import re
+
+logger = logging.getLogger("handcrafted_graph.collector")
 
 # Patterns that mark an evidence item as absent/unavailable from the knowledge base.
 # Used by _data_analyst_has_content() to decide whether to silence the Collector.
@@ -77,10 +80,22 @@ class Collector(Node):
                 return match.group(1)
         return ""
 
+    def _extract_section_id_from_task(self) -> str:
+        """Fallback: parse a section_X ID from the current LeadArchitect task directive.
+
+        Used when DataAnalyst omits the mandatory [SECTION_ID] tag. The LeadArchitect
+        sets ReportState.task to a directive such as 'correct section_2', so a
+        section_N pattern is reliably present when the REVISION phase is on track.
+        """
+        match = re.search(r"section_\d+", self.report.task, re.IGNORECASE)
+        return match.group(0).lower() if match else ""
+
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
         if not self._data_analyst_has_content(spatial_info):
+            if not self._is_revision_phase():
+                self.report.task = "[SECTION_SKIPPED — ASSIGN NEXT SECTION]"
             return
         execution_trace = kwargs.get("execution_trace", None)
 
@@ -100,11 +115,28 @@ class Collector(Node):
         new_sources = self.source_buffer.flush()
         if self._is_revision_phase():
             section_id = self._extract_section_id(spatial_info)
+            if not section_id:
+                section_id = self._extract_section_id_from_task()
+                if section_id:
+                    logger.warning(
+                        "REVISION: DataAnalyst omitted [SECTION_ID] tag; "
+                        f"falling back to '{section_id}' from task directive."
+                    )
+                else:
+                    logger.error(
+                        "REVISION: DataAnalyst omitted [SECTION_ID] tag and no section ID "
+                        "could be inferred from the task directive — correction skipped."
+                    )
             if section_id and self.report.replace_section(section_id, response1):
                 self.report.progress = response2
-            # If section_id is missing or not found, do nothing
+                self.report.task = "[CORRECTION_APPLIED — ASSIGN NEXT CORRECTION]"
+            elif section_id:
+                logger.error(
+                    f"REVISION: section '{section_id}' not found in report — correction skipped."
+                )
         else:
             self.report.append(response1, response2, new_sources)
+            self.report.task = "[SECTION_COMPLETE — ASSIGN NEXT SECTION]"
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
         return response1
@@ -113,6 +145,8 @@ class Collector(Node):
         if not spatial_info:  # If no agent appended, the collector stays idle
             return
         if not self._data_analyst_has_content(spatial_info):
+            if not self._is_revision_phase():
+                self.report.task = "[SECTION_SKIPPED — ASSIGN NEXT SECTION]"
             return
         execution_trace = kwargs.get("execution_trace", None)
 
@@ -132,16 +166,32 @@ class Collector(Node):
         new_sources = self.source_buffer.flush()
         if self._is_revision_phase():
             section_id = self._extract_section_id(spatial_info)
+            if not section_id:
+                section_id = self._extract_section_id_from_task()
+                if section_id:
+                    logger.warning(
+                        "REVISION: DataAnalyst omitted [SECTION_ID] tag; "
+                        f"falling back to '{section_id}' from task directive."
+                    )
+                else:
+                    logger.error(
+                        "REVISION: DataAnalyst omitted [SECTION_ID] tag and no section ID "
+                        "could be inferred from the task directive — correction skipped."
+                    )
             if section_id and self.report.replace_section(section_id, response1):
                 self.report.progress = response2
-            # If section_id is missing or not found, do nothing — appending would
-            # corrupt the report by leaving the old section and adding a duplicate.
+                self.report.task = "[CORRECTION_APPLIED — ASSIGN NEXT CORRECTION]"
+            elif section_id:
+                logger.error(
+                    f"REVISION: section '{section_id}' not found in report — correction skipped."
+                )
         else:
             self.report.append(response1, response2, new_sources)
+            self.report.task = "[SECTION_COMPLETE — ASSIGN NEXT SECTION]"
         if execution_trace:
             execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
         return response1
-    
+
     def _progress_prompt(self, previous_progress: str, addition: str) -> str:
         system_prompt = self.prompt_set.get_description("Summarizer")
 

@@ -1,9 +1,13 @@
+import re
+
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from tools.rag import RAGManager
 from utils.config import get_llm
 from utils.globals import ReportState, SourceBuffer
 from prompt.prompt_set_registry import PromptSetRegistry
+
+_DEFICIENCY_RE = re.compile(r"State Deficiency", re.IGNORECASE)
 
 
 @AgentRegistry.register("Researcher")
@@ -28,8 +32,60 @@ class Researcher(Node):
         )
         return system_prompt, user_prompt
 
+    def _is_revision_phase(self) -> bool:
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            return PhaseState.instance().current_phase == PhaseType.REVISION
+        except Exception:
+            return False
+
+    def _is_planning_phase(self) -> bool:
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            return PhaseState.instance().current_phase == PhaseType.PLANNING
+        except Exception:
+            return False
+
+    def _persist_deficiencies(self, response: str) -> None:
+        """Parse State Deficiency entries from a PLANNING coverage response and store them."""
+        for match in re.finditer(r"State Deficiency:\s*(.+?)(?:\n|$)", response, re.IGNORECASE):
+            self.report.add_deficiency(match.group(1).strip())
+
+    def _get_da_output(self, spatial_info: dict):
+        """Return DataAnalyst's message from spatial_info, or None if absent."""
+        for info in spatial_info.values():
+            if info.get("role") == "Data Analyst":
+                return str(info.get("output", ""))
+        return None
+
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
+
+        if self._is_revision_phase():
+            da_output = self._get_da_output(spatial_info)
+            if da_output is not None:
+                # REVISION Round A (DataAnalyst→Researcher edge present).
+                # Only retrieve evidence if DataAnalyst flagged a State Deficiency.
+                if not _DEFICIENCY_RE.search(da_output):
+                    if execution_trace:
+                        execution_trace.trace[-1]["Researcher"]["response"] = "[HOLD]"
+                    return "[HOLD]"
+            else:
+                # REVISION Round B (no incoming edge from DataAnalyst).
+                # Forward prior evidence to DataAnalyst without a new RAG call.
+                prior_outputs = self.last_memory.get("outputs") or []
+                prior = str(prior_outputs[-1]).strip() if prior_outputs else ""
+                is_hold = (
+                    not prior
+                    or prior.startswith("[HOLD]")
+                    or prior.startswith("[RESEARCH_EXHAUSTED]")
+                )
+                result = "[HOLD]" if is_hold else prior
+                if execution_trace:
+                    execution_trace.trace[-1]["Researcher"]["response"] = result
+                return result
 
         # Tool use
         system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
@@ -44,11 +100,18 @@ class Researcher(Node):
         documents = self.rag.query_docs(query)
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
+
+        if not documents:
+            signal = "[RESEARCH_EXHAUSTED] RAG returned no documents for this query."
+            if execution_trace:
+                execution_trace.trace[-1]["Researcher"]["response"] = signal
+            return signal
+
         for i, document in enumerate(documents):
             citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
             spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
             SourceBuffer.instance().add(document)
-        
+
         # Base execution
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
@@ -57,10 +120,36 @@ class Researcher(Node):
         response = self.llm.gen(message, calling_agent="Researcher")
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["response"] = response
+        if self._is_planning_phase():
+            self._persist_deficiencies(response)
         return response
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
+
+        if self._is_revision_phase():
+            da_output = self._get_da_output(spatial_info)
+            if da_output is not None:
+                # REVISION Round A (DataAnalyst→Researcher edge present).
+                # Only retrieve evidence if DataAnalyst flagged a State Deficiency.
+                if not _DEFICIENCY_RE.search(da_output):
+                    if execution_trace:
+                        execution_trace.trace[-1]["Researcher"]["response"] = "[HOLD]"
+                    return "[HOLD]"
+            else:
+                # REVISION Round B (no incoming edge from DataAnalyst).
+                # Forward prior evidence to DataAnalyst without a new RAG call.
+                prior_outputs = self.last_memory.get("outputs") or []
+                prior = str(prior_outputs[-1]).strip() if prior_outputs else ""
+                is_hold = (
+                    not prior
+                    or prior.startswith("[HOLD]")
+                    or prior.startswith("[RESEARCH_EXHAUSTED]")
+                )
+                result = "[HOLD]" if is_hold else prior
+                if execution_trace:
+                    execution_trace.trace[-1]["Researcher"]["response"] = result
+                return result
 
         # Tool use
         system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
@@ -75,11 +164,18 @@ class Researcher(Node):
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["prompt"] = query
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
+
+        if not documents:
+            signal = "[RESEARCH_EXHAUSTED] RAG returned no documents for this query."
+            if execution_trace:
+                execution_trace.trace[-1]["Researcher"]["response"] = signal
+            return signal
+
         for i, document in enumerate(documents):
             citation = f"<source> {document['source']} </source>\n<content>\n{document['content']}\n</content>"
             spatial_info[f"Data_{i}"] = {"role": "RAG Tool", "output": citation}
             SourceBuffer.instance().add(document)
-        
+
         # Base execution
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
@@ -88,6 +184,8 @@ class Researcher(Node):
         response = await self.llm.agen(message, calling_agent="Researcher")
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["response"] = response
+        if self._is_planning_phase():
+            self._persist_deficiencies(response)
         return response
 
 if __name__ == "__main__":

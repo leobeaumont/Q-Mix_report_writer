@@ -46,6 +46,7 @@ class ReportState(Singleton):
         self.sources: List = []
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
+        self.deficient_topics: List[str] = []  # topics absent from the knowledge base
 
     def reset(self):
         self.content = ""
@@ -54,6 +55,13 @@ class ReportState(Singleton):
         self.sources = []
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
+        self.deficient_topics = []
+
+    def add_deficiency(self, topic: str) -> None:
+        """Record a topic the Researcher confirmed is absent from the knowledge base."""
+        topic = topic.strip()
+        if topic and topic not in self.deficient_topics:
+            self.deficient_topics.append(topic)
 
     def append(self, text: str, progress: str, new_sources: Optional[List] = None):
         """Append a new section. Infers title from first Markdown heading."""

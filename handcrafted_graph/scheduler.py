@@ -130,15 +130,29 @@ class RoundScheduler:
         return True
 
     def _temporal_heuristic(self, node: Node) -> bool:
-        """Include the optional agent if it has produced output before.
+        """Include the optional agent if it has produced meaningful output before.
 
-        This avoids the overhead of running an agent that has no accumulated
-        knowledge yet, while ensuring it joins once it has contributed.
-        On round 0 of the very first phase every agent has no memory, so we
-        include them by default to seed the pipeline.
+        Agents that explicitly held last round (output starts with a hold
+        signal) are treated the same as agents that never ran — they are
+        excluded from the next round unless the seed condition fires.
+
+        Hold signals recognised:
+          [HOLD]               — agent chose to hold (e.g. Researcher in REVISION
+                                 when DataAnalyst flagged no gaps).
+          [RESEARCH_EXHAUSTED] — RAG returned no documents for the query.
+
+        On round 0 of every phase all memory is cleared, so no agent has
+        prior output yet — the seed condition includes all optional agents.
         """
-        has_prior_output = bool(node.last_memory.get("outputs"))
-        # Always include on the first cycle (no prior output anywhere yet)
+        outputs = node.last_memory.get("outputs") or []
+        last_output = str(outputs[-1]).strip() if outputs else ""
+        has_prior_output = (
+            bool(last_output)
+            and not last_output.startswith("[HOLD]")
+            and not last_output.startswith("[RESEARCH_EXHAUSTED]")
+        )
+        # Seed condition: include every optional agent on the first round of
+        # a phase when no agent has run yet (all memory was just cleared).
         any_agent_has_output = any(
             bool(n.last_memory.get("outputs")) for n in self.nodes.values()
         )

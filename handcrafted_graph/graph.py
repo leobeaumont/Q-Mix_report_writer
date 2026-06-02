@@ -148,6 +148,8 @@ class HandcraftedGraph:
         max_time: int,
         overall_pbar: Optional[tqdm] = None,
     ) -> None:
+        self._clear_all_memory()
+
         scheduler = RoundScheduler(
             nodes=self.nodes,
             collector_id=self.collector_id,
@@ -199,6 +201,38 @@ class HandcraftedGraph:
 
             if overall_pbar is not None:
                 overall_pbar.update(1)
+
+            if phase.name == PhaseType.RESEARCH:
+                researcher_node = self._get_node_by_name("Researcher")
+                if researcher_node and researcher_node.outputs:
+                    latest_output = str(researcher_node.outputs[-1] or "")
+                    if "[RESEARCH_EXHAUSTED]" in latest_output:
+                        logger.info(
+                            f"Phase '{phase.name.value}' completed early at round {round_idx}: "
+                            f"[RESEARCH_EXHAUSTED] signal received."
+                        )
+                        if overall_pbar is not None:
+                            overall_pbar.update(phase.max_rounds - round_idx - 1)
+                        break
+
+            if ReportState.instance().task == "[DRAFTING_COMPLETE]":
+                logger.info(
+                    f"Phase '{phase.name.value}' completed early at round {round_idx}: "
+                    f"[DRAFTING_COMPLETE] signal received."
+                )
+                if overall_pbar is not None:
+                    overall_pbar.update(phase.max_rounds - round_idx - 1)
+                ReportState.instance().task = "[WAITING FOR NEXT PHASE DIRECTIVE]"
+                break
+
+            if ReportState.instance().task == "[REVISION_COMPLETE]":
+                logger.info(
+                    f"Phase '{phase.name.value}' completed early at round {round_idx}: "
+                    f"[REVISION_COMPLETE] signal received."
+                )
+                if overall_pbar is not None:
+                    overall_pbar.update(phase.max_rounds - round_idx - 1)
+                break
 
     async def _execute_round(
         self,
@@ -327,6 +361,17 @@ class HandcraftedGraph:
         for node in self.nodes.values():
             node.temporal_predecessors = []
             node.temporal_successors = []
+
+    def _clear_all_memory(self) -> None:
+        """Wipe last_memory for every node at a phase boundary.
+
+        Prevents stale temporal outputs from a finished phase from
+        pattern-biasing agent behaviour in the next one. All durable
+        cross-phase state (section list, current directive, progress)
+        is carried by ReportState, not by temporal memory.
+        """
+        for node in self.nodes.values():
+            node.last_memory = {"inputs": [], "outputs": [], "raw_inputs": []}
 
     def _update_memory(self) -> None:
         for node in self.nodes.values():

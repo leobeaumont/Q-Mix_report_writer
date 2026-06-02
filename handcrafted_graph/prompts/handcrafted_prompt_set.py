@@ -97,7 +97,11 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "Return ALL relevant evidence atoms you found, with source attribution — "
         "do not withhold evidence you already have. "
         "Signal 'State Deficiency: [specific item]' only for sub-items that are "
-        "completely absent from RAG results, after reporting what you did find."
+        "completely absent from RAG results, after reporting what you did find. "
+        "CRITICAL: If the retrieved documents contain no information relevant to "
+        "the current directive (every document is off-topic or already fully "
+        "reported), output `[RESEARCH_EXHAUSTED]` as the sole content of your "
+        "response and nothing else."
     ),
     (PhaseType.RESEARCH, "Data Analyst"): (
         "Synthesise the Researcher's evidence atoms into a structured Markdown list "
@@ -109,6 +113,16 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "completed in PLANNING. Your only task each round is to assign ONE new section. "
         "Check the 'Sections written so far' list: any section present there is written "
         "and complete — '(untitled)' means no heading was extracted, not that it is empty. "
+        "IMPORTANT: If the 'Current Team Objective' reads "
+        "`[SECTION_COMPLETE — ASSIGN NEXT SECTION]`, the Collector just finished "
+        "writing the previous section. That section must NOT be re-assigned. "
+        "Look at 'Sections written so far', find the first topic not yet listed, "
+        "and assign it as the new section. "
+        "IMPORTANT: If the 'Current Team Objective' reads "
+        "`[SECTION_SKIPPED — ASSIGN NEXT SECTION]`, the previous section had no "
+        "supporting evidence in the knowledge base and was skipped. That topic "
+        "must NOT be re-assigned. Move directly to the next unwritten topic. "
+        "If no unwritten topics remain, output only `[DRAFTING_COMPLETE]`."
         "To find the next section: look at the progress summary for the topic sequence "
         "established so far, then assign the next logical topic not yet written. "
         "State the new section title and provide a one-sentence directive for DataAnalyst. "
@@ -175,7 +189,13 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "Direct DataAnalyst to prepare corrected content for the specific section "
         "flagged by the Reviewer. Scope the correction narrowly. "
         "Reference the exact section ID from the report section list above "
-        "(e.g., 'correct section_2')."
+        "(e.g., 'correct section_2'). "
+        "IMPORTANT: If the 'Current Team Objective' reads "
+        "`[CORRECTION_APPLIED — ASSIGN NEXT CORRECTION]`, the previous correction "
+        "was successfully applied. Check your previous output and the Reviewer's "
+        "critique for any remaining unfixed issues and assign the next section to "
+        "correct. If all flagged issues have been addressed, output only "
+        "`[REVISION_COMPLETE]` and nothing else."
     ),
     (PhaseType.REVISION, "Data Analyst"): (
         "Prepare corrected content for the section flagged by the Reviewer. "
@@ -188,8 +208,11 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "`[SECTION_ID: section_X]` followed by `[NO SUPPORTED CONTENT]` and nothing else."
     ),
     (PhaseType.REVISION, "Researcher"): (
-        "Retrieve additional evidence from RAG only if the revision requires new "
-        "sourcing. Otherwise skip."
+        "Read DataAnalyst's message in '### Received messages'. "
+        "If it contains one or more 'State Deficiency' entries, run a targeted "
+        "RAG query for each flagged item and forward the retrieved evidence. "
+        "If DataAnalyst's message contains no State Deficiency entries, "
+        "output nothing — do not add unsolicited evidence."
     ),
     (PhaseType.REVISION, "Collector"): (
         "Rewrite the flagged section using the corrected content from DataAnalyst. "
