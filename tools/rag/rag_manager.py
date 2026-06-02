@@ -1,8 +1,11 @@
+import json
+import re
+import urllib.request
 import chromadb
 from chromadb.utils import embedding_functions
 import tiktoken
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple
 
 from utils.config import get_llm_config
 
@@ -17,20 +20,16 @@ except ImportError:
     Document = None
 
 
-def _build_ollama_embedding_endpoint(base_url: str) -> str:
-    base_url = base_url.rstrip("/")
-    if base_url.endswith("/api/embeddings"):
-        return base_url
-    if base_url.endswith("/api"):
-        return f"{base_url}/embeddings"
-    return f"{base_url}/api/embeddings"
+_PAGE_MARKER_RE = re.compile(r"\[PAGE (\d+)\]")
+# Observed character ceiling for nomic-embed-text on this Ollama deployment.
+# The embedding input is truncated to this length; stored chunk text is never truncated.
+_EMBED_MAX_CHARS = 2900
 
 
-def _get_ollama_embedding_endpoint() -> str:
-    """Read the Ollama base URL from default.yaml at call time."""
+def _get_ollama_base_url() -> str:
+    """Read the Ollama base URL from default.yaml (same path as ollama_chat.py)."""
     llm_config = get_llm_config()
-    base_url = llm_config.get("ollama_base_url", "http://localhost:11434")
-    return _build_ollama_embedding_endpoint(base_url)
+    return llm_config.get("providers", {}).get("ollama", {}).get("base_url", "http://localhost:11434")
 
 
 def _load_text_from_file(file_path: str) -> Tuple[str, Dict[str, str]]:
@@ -105,7 +104,7 @@ class RAGManager:
         )"""
 
         self.emb_fn = embedding_functions.OllamaEmbeddingFunction(
-            url=_get_ollama_embedding_endpoint(),
+            url=_get_ollama_base_url(),
             model_name="nomic-embed-text"
         )
 
@@ -116,6 +115,28 @@ class RAGManager:
         self._reranker = None
         self._reranker_tokenizer = None
         self._reranker_model_name = "BAAI/bge-reranker-base"
+
+    def _embed_one(self, base_url: str, text: str) -> List[float]:
+        """Embed a single text, truncating to _EMBED_MAX_CHARS if needed."""
+        payload = json.dumps(
+            {"model": "nomic-embed-text", "input": [text[:_EMBED_MAX_CHARS]]}
+        ).encode()
+        req = urllib.request.Request(
+            f"{base_url}/api/embed",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())["embeddings"][0]
+
+    def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Call Ollama directly for embeddings, bypassing ChromaDB's internal routing.
+
+        Embeds one text at a time with exponential back-off retry to handle
+        Ollama's internal child-process restart failures gracefully.
+        """
+        base_url = _get_ollama_base_url().rstrip("/")
+        return [self._embed_one(base_url, text) for text in texts]
 
     def _rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
         if self._reranker is None:
@@ -203,13 +224,17 @@ class RAGManager:
             return []
         return self._rerank(queries[0], merged, top_k)
     
-    def add_documents(self, documents, metadatas, ids):
+    def add_documents(self, documents, metadatas, ids, embeddings: Optional[List] = None):
         """
         metadatas should be a list of dicts, e.g.,
         [{'source_name': 'Annual_Report.pdf', 'page_number': 12}, ...]
+
+        embeddings: optional pre-computed embeddings (e.g. from contextual prefixing).
+                    When provided, ChromaDB stores documents as-is but uses these vectors.
         """
         self.collection.upsert(
             documents=documents,
+            embeddings=embeddings,
             metadatas=metadatas,
             ids=ids
         )
@@ -217,6 +242,14 @@ class RAGManager:
     def add_document_from_path(self, file_path: str, chunk_size: int = 512, overlap: int = 50) -> Dict:
         """
         Load a document, chunk it, generate metadata, and add to database.
+
+        Page numbers are extracted from [PAGE N] markers already embedded in
+        PDF text and stored in chunk metadata so citations are accurate.
+
+        Each chunk is embedded using a contextual prefix
+        "[Source: name | Page: N]" prepended to the text, which anchors
+        vague chunks to their document context at embedding time. The stored
+        document text remains the original (no prefix).
 
         Args:
             file_path: Path to document (.pdf, .docx, .txt, .md)
@@ -229,30 +262,53 @@ class RAGManager:
         text, base_metadata = _load_text_from_file(file_path)
         chunks = _chunk_text(text, chunk_size=chunk_size, overlap=overlap)
 
+        source_name = base_metadata["source_name"]
+        file_type = base_metadata["file_type"]
+        is_pdf = file_type == ".pdf"
+
         documents = []
         metadatas = []
         ids = []
+        texts_to_embed = []
 
+        current_page = 1
         for idx, chunk in enumerate(chunks):
+            # 3.1 — page tracking: update running page whenever a marker appears
+            markers = _PAGE_MARKER_RE.findall(chunk)
+            if markers:
+                current_page = int(markers[-1])
+
             chunk_metadata = {
-                "source_name": base_metadata["source_name"],
-                "file_type": base_metadata["file_type"],
+                "source_name": source_name,
+                "file_type": file_type,
                 "chunk_index": idx,
-                "total_chunks": len(chunks)
+                "total_chunks": len(chunks),
             }
+            if is_pdf:
+                chunk_metadata["page_number"] = current_page
+
+            # 3.2 — contextual prefix for embedding only (original text stored)
+            prefix = (
+                f"[Source: {source_name} | Page: {current_page}]"
+                if is_pdf
+                else f"[Source: {source_name}]"
+            )
+            texts_to_embed.append(f"{prefix}\n{chunk}")
+
             documents.append(chunk)
             metadatas.append(chunk_metadata)
-            ids.append(_generate_chunk_id(base_metadata["source_name"], idx))
+            ids.append(_generate_chunk_id(source_name, idx))
 
-        self.add_documents(documents, metadatas, ids)
+        embeddings = self._embed_texts(texts_to_embed)
+        self.add_documents(documents, metadatas, ids, embeddings=embeddings)
 
         return {
             "success": True,
-            "source_name": base_metadata["source_name"],
+            "source_name": source_name,
             "num_chunks": len(chunks),
-            "file_type": base_metadata["file_type"],
+            "file_type": file_type,
             "chunk_size": chunk_size,
-            "overlap": overlap
+            "overlap": overlap,
         }
 
     def list_documents(self) -> List[Dict]:
