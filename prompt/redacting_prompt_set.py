@@ -194,10 +194,15 @@ Audit this specific chunk for technical truth, logic, and verifiability. Use the
 
     "RAG Tool": """
 ### Role: Search Architect & Query Optimizer
-You are the query-formulation layer for a Scientific RAG system. Your goal is to translate the current mission requirements into a optimized search string for a Vector Database.
+You are the query-formulation layer for a Scientific RAG system. Your goal is to translate the current mission requirements into 3 semantically distinct search strings for a Vector Database.
 
 ### Objective
-Identify the most relevant "Technical Primitives" (formulas, constants, experimental results, or methodology details) for the current task. Select at most 5-8 high-signal terms that best represent the target concept. Stop once you have enough terms; do not enumerate exhaustively.
+Generate exactly 3 queries that each approach the information need from a different angle:
+- **Query 1 — Implementation:** core technical concept, method names, direct parameters.
+- **Query 2 — Infrastructure:** system-level context, mechanisms, supporting components.
+- **Query 3 — Behavioral/Process:** dynamic behavior, measurement, evaluation, or outcomes.
+
+Each query must be composed of "Technical Primitives" (formulas, method names, constants, experimental parameters). Use at most 8 high-signal terms per query.
 """
 }
 
@@ -267,13 +272,15 @@ ROLE_CONSTRAINTS = {
 
     "RAG Tool": """
 ### Query Formulation Rules
-* **Semantic Density:** Use specific scientific terminology. The query must remain short.
-* **No Natural Language:** Do not use "Please find..." or "I am looking for...". Provide only the raw search terms.
+* **Semantic Density:** Use specific scientific terminology. Each query must remain short (≤ 8 terms).
+* **No Natural Language:** Do not use "Please find..." or "I am looking for...". Provide only raw search terms.
 * **Primitive Focus:** Focus on nouns and specific parameters that would appear in peer-reviewed literature.
-* **Contextual Filtering:** You must consider the communication from other agents because their needs may differ from the global task.
+* **Contextual Filtering:** Consider the communication from other agents — their needs may differ from the global task.
+* **Hard Limit:** Each query line must contain at most 8 space-separated terms — never more.
+* **Fallback:** If you cannot generate any valid query, output exactly `NO_QUERY` on a single line. Never output status signals such as `[RESEARCH_EXHAUSTED]` or `[HOLD]`.
 
 ### Output Format
-Provide only the optimized search query string. No preamble, no explanation.
+Output exactly 3 lines. Each line is one search query string. No numbering, no labels, no preamble, no explanation.
 """
 }
 

@@ -110,28 +110,98 @@ class RAGManager:
         )
 
         self.collection = self.client.get_or_create_collection(
-            name=collection_name, 
+            name=collection_name,
             embedding_function=self.emb_fn
         )
+        self._reranker = None
+        self._reranker_tokenizer = None
+        self._reranker_model_name = "BAAI/bge-reranker-base"
 
-    def query_docs(self, query_text, n_results=2):
+    def _rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
+        if self._reranker is None:
+            import torch
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+            self._reranker_tokenizer = AutoTokenizer.from_pretrained(self._reranker_model_name)
+            self._reranker = AutoModelForSequenceClassification.from_pretrained(self._reranker_model_name)
+            self._reranker.eval()
+        import torch
+        pairs = [[query, c["content"]] for c in candidates]
+        inputs = self._reranker_tokenizer(
+            pairs, padding=True, truncation=True, max_length=512, return_tensors="pt"
+        )
+        with torch.no_grad():
+            scores = self._reranker(**inputs).logits.squeeze(-1).float().tolist()
+        if isinstance(scores, float):
+            scores = [scores]
+        ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+        return [c for _, c in ranked[:top_k]]
+
+    def _get_candidates(self, query_text: str, n_candidates: int, distance_threshold: float) -> List[Dict]:
+        """Fetch and filter raw candidates from ChromaDB for a single query."""
         results = self.collection.query(
             query_texts=[query_text],
-            n_results=n_results
+            n_results=n_candidates,
+            include=["documents", "metadatas", "distances"],
         )
-        
-        extracted_data = []
-        documents = results.get('documents', [[]])[0]
-        metadatas = results.get('metadatas', [[]])[0]
-
-        for doc, meta in zip(documents, metadatas):
-            extracted_data.append({
+        return [
+            {
                 "content": doc,
                 "source": meta.get("source_name", "Unknown Source"),
-                "page": meta.get("page_number", "N/A")
-            })
-            
-        return extracted_data
+                "page": meta.get("page_number", "N/A"),
+                "distance": round(dist, 4),
+                "id": chunk_id,
+            }
+            for doc, meta, dist, chunk_id in zip(
+                results.get("documents", [[]])[0],
+                results.get("metadatas", [[]])[0],
+                results.get("distances", [[]])[0],
+                results.get("ids", [[]])[0],
+            )
+            if dist <= distance_threshold
+        ]
+
+    def query_docs(self, query_text: str, n_candidates: int = 15, top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
+        """
+        Two-stage retrieval: broad vector search → similarity filter → cross-encoder rerank.
+
+        n_candidates:       chunks fetched from ChromaDB (wide net)
+        top_k:              chunks returned after reranking (tight output)
+        distance_threshold: cosine distance ceiling (0=identical, 1=orthogonal)
+        """
+        count = self.collection.count()
+        if count == 0:
+            return []
+        candidates = self._get_candidates(query_text, min(n_candidates, count), distance_threshold)
+        if not candidates:
+            return []
+        return self._rerank(query_text, candidates, top_k)
+
+    def query_docs_multi(self, queries: List[str], top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
+        """
+        Multi-query retrieval: gather candidates from each query, deduplicate by chunk ID, rerank.
+
+        queries:            list of semantically distinct search strings
+        top_k:              chunks returned after reranking
+        distance_threshold: cosine distance ceiling applied per query before merging
+
+        The first query is used as the anchor for cross-encoder reranking.
+        """
+        count = self.collection.count()
+        if count == 0:
+            return []
+        n_candidates = min(15, count)
+
+        seen_ids: set = set()
+        merged: List[Dict] = []
+        for query in queries:
+            for candidate in self._get_candidates(query, n_candidates, distance_threshold):
+                if candidate["id"] not in seen_ids:
+                    seen_ids.add(candidate["id"])
+                    merged.append(candidate)
+
+        if not merged:
+            return []
+        return self._rerank(queries[0], merged, top_k)
     
     def add_documents(self, documents, metadatas, ids):
         """

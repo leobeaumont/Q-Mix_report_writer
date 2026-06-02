@@ -8,6 +8,17 @@ from utils.globals import ReportState, SourceBuffer
 from prompt.prompt_set_registry import PromptSetRegistry
 
 _DEFICIENCY_RE = re.compile(r"State Deficiency", re.IGNORECASE)
+_QUERY_PREFIX_RE = re.compile(r"^[\d\w]+[.)]\s*")
+
+
+def _parse_queries(raw: str) -> list:
+    """Extract up to 3 valid search queries from a multi-line LLM response."""
+    queries = []
+    for line in raw.strip().splitlines():
+        line = _QUERY_PREFIX_RE.sub("", line.strip())
+        if line and not line.startswith("[") and line.upper() != "NO_QUERY":
+            queries.append(line)
+    return queries[:3]
 
 
 @AgentRegistry.register("Researcher")
@@ -91,13 +102,21 @@ class Researcher(Node):
         system_prompt = self.prompt_set.get_description("RAG Tool") + self.prompt_set.get_constraint("RAG Tool")
         _, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         if execution_trace:
-            execution_trace.trace[-1]["RAG"]["prompt"] = system_prompt + user_prompt
             execution_trace.trace[-1]["RAG"]["message_to"].append("Researcher")
             execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
             execution_trace.trace[-1]["exec_order"].append("RAG")
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        query = self.llm.gen(message)
-        documents = self.rag.query_docs(query)
+        raw_queries = self.llm.gen(message)
+        queries = _parse_queries(raw_queries) if raw_queries and not raw_queries.strip().startswith("[") else []
+        if execution_trace:
+            execution_trace.trace[-1]["RAG"]["prompt"] = queries
+        if not queries:
+            signal = "[RESEARCH_EXHAUSTED] RAG returned no documents for this query."
+            if execution_trace:
+                execution_trace.trace[-1]["RAG"]["response"] = signal
+                execution_trace.trace[-1]["Researcher"]["response"] = signal
+            return signal
+        documents = self.rag.query_docs_multi(queries)
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
 
@@ -159,10 +178,18 @@ class Researcher(Node):
             execution_trace.trace[-1]["Researcher"]["message_to"].append("RAG")
             execution_trace.trace[-1]["exec_order"].append("RAG")
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        query = await self.llm.agen(message)
-        documents = self.rag.query_docs(query)
+        raw_queries = await self.llm.agen(message)
+        queries = _parse_queries(raw_queries) if raw_queries and not raw_queries.strip().startswith("[") else []
         if execution_trace:
-            execution_trace.trace[-1]["RAG"]["prompt"] = query
+            execution_trace.trace[-1]["RAG"]["prompt"] = queries
+        if not queries:
+            signal = "[RESEARCH_EXHAUSTED] RAG returned no documents for this query."
+            if execution_trace:
+                execution_trace.trace[-1]["RAG"]["response"] = signal
+                execution_trace.trace[-1]["Researcher"]["response"] = signal
+            return signal
+        documents = self.rag.query_docs_multi(queries)
+        if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
 
         if not documents:
