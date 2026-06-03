@@ -346,8 +346,17 @@ class HandcraftedGraph:
                 sender.add_successor(receiver, "spatial")
 
     def _connect_temporal(self) -> None:
-        """Connect temporal self-edges for nodes with prior-round outputs."""
+        """Connect temporal self-edges for nodes with prior-round outputs.
+
+        Skipped entirely during DRAFTING: every round targets a fresh section,
+        so a prior-round output from a different section contaminates context
+        rather than helping. All durable cross-round state (section list,
+        current directive, written prose) is carried by ReportState, making
+        temporal self-edges redundant and actively harmful in this phase.
+        """
         self._clear_temporal()
+        if self.phase_state.current_phase == PhaseType.DRAFTING:
+            return
         for node in self.nodes.values():
             if node.last_memory["outputs"]:
                 node.add_predecessor(node, "temporal")

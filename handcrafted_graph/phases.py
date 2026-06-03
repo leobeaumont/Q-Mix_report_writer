@@ -211,7 +211,8 @@ REVISION_PHASE = PhaseConfig(
         "content and flags evidence gaps; Researcher retrieves missing evidence "
         "when gaps are flagged; Collector rewrites the corrected section in-place."
     ),
-    max_rounds=4,
+    max_rounds=12,  # 2 rounds per section × up to 6 corrections; [REVISION_COMPLETE]
+                    # exits early so unused rounds are never consumed.
     next_phase=None,  # End of pipeline
     round_topologies=[
         # Round A: LeadArchitect issues correction directive; DataAnalyst runs first
