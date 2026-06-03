@@ -1,5 +1,12 @@
 tasks = [
-    "Generate a report on architecture-based adaptation mechanisms for dynamically composing software components at runtime.",
-    "Generate a report on systems engineering approaches for early detection of model conflicts in complex reactor design projects.",
-    "Generate a report on integrating context-specific knowledge into adaptive middleware frameworks using service-oriented architecture.",
+    "The Nuclear Equation of State: From Dense Matter to Neutron Stars",
+    " Quark-Gluon Plasma and the QCD Phase Diagram",
+    "Nuclear Forces and Few-Body Systems",
+    "Nuclear Structure: From Shell Model to Exotic Nuclei",
+    "Relativistic Heavy-Ion Collisions: Collective Flow and Hydrodynamics",
+    "Heavy Quarks and Quarkonium in the QGP",
+    "Strangeness in Nuclear Physics: Hyperons and Strange Hadrons",
+    "Nuclear Fission: Dynamics and Fragment Properties",
+    "Nuclear Astrophysics: Supernovae, Nucleosynthesis, and Stellar Reactions",
+    "Neutrinos and Nuclear Physics",
 ]

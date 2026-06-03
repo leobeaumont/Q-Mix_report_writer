@@ -92,14 +92,28 @@ class ReportState(Singleton):
                 return True
         return False
 
-    def list_sections(self) -> str:
-        """Formatted section index for agent context (REVIEW / REVISION phases)."""
+    def list_sections(self, verbose: bool = False) -> str:
+        """Formatted section index for agent context (REVIEW / REVISION phases).
+
+        verbose=True appends a one-line content excerpt per section so agents
+        can identify sections by content rather than title alone, preventing
+        ID mismatches when two sections share similar titles.
+        """
         if not self.sections:
             return "[No sections written yet]"
-        return "\n".join(
-            f"- {s['id']}: {s['title'] or '(untitled)'}"
-            for s in self.sections
-        )
+        lines = []
+        for s in self.sections:
+            entry = f"- {s['id']}: {s['title'] or '(untitled)'}"
+            if verbose:
+                body = [
+                    l for l in s["content"].strip().splitlines()
+                    if l.strip() and not l.lstrip().startswith("#")
+                ]
+                if body:
+                    excerpt = " ".join(body[0].split())[:120]
+                    entry += f"\n  ↳ {excerpt}…"
+            lines.append(entry)
+        return "\n".join(lines)
 
     def get_last(self) -> str:
         if self.sections:

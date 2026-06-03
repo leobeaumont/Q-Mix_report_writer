@@ -133,9 +133,15 @@ class StandaloneVisualizer:
             
             if num_executed > 0 and last_agent_to_act in current_round_data:
                 agent_info = current_round_data[last_agent_to_act]
-                prompt_md = agent_info.get('prompt') or 'N/A'
+                prompt_raw = agent_info.get('prompt') or 'N/A'
                 response_md = agent_info.get('response') or 'N/A'
-                
+
+                # RAG prompt is a list of query strings; render as a bullet list.
+                if isinstance(prompt_raw, list):
+                    prompt_md = '\n'.join(f'- {q}' for q in prompt_raw) or 'N/A'
+                else:
+                    prompt_md = prompt_raw
+
                 prompt_html = markdown.markdown(prompt_md, extensions=['fenced_code', 'tables'])
                 response_html = markdown.markdown(response_md, extensions=['fenced_code', 'tables'])
                 

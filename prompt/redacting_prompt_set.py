@@ -277,6 +277,7 @@ ROLE_CONSTRAINTS = {
 * **Primitive Focus:** Focus on nouns and specific parameters that would appear in peer-reviewed literature.
 * **Contextual Filtering:** Consider the communication from other agents — their needs may differ from the global task.
 * **Hard Limit:** Each query line must contain at most 8 space-separated terms — never more.
+* **No citations:** Never append source references, pipe separators, or attribution markers (e.g. `| [source: ...]`) to a query line. Raw terms only.
 * **Fallback:** If you cannot generate any valid query, output exactly `NO_QUERY` on a single line. Never output status signals such as `[RESEARCH_EXHAUSTED]` or `[HOLD]`.
 
 ### Output Format

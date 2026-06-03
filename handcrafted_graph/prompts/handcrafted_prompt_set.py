@@ -266,7 +266,7 @@ class HandcraftedPromptSet(PromptSet):
         if phase in (PhaseType.REVIEW, PhaseType.REVISION):
             from utils.globals import ReportState
             block += f"\n**Report sections (use IDs for targeted corrections):**\n"
-            block += ReportState.instance().list_sections() + "\n"
+            block += ReportState.instance().list_sections(verbose=True) + "\n"
 
         return block
 

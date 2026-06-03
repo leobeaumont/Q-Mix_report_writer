@@ -12,11 +12,25 @@ _QUERY_PREFIX_RE = re.compile(r"^[\d\w]+[.)]\s*")
 
 
 def _parse_queries(raw: str) -> list:
-    """Extract up to 3 valid search queries from a multi-line LLM response."""
+    """Extract up to 3 valid search queries from a multi-line LLM response.
+
+    Strips citation artefacts (| [source: ...]) that leak from the Researcher's
+    evidence format into the query formulation context, then rejects lines that
+    are clearly natural-language prose rather than keyword search strings via:
+      - word count > 15: catches long sentences beyond the 8-term prompt limit
+      - sentence boundary ('. ' or trailing '.'): catches shorter prose
+    """
     queries = []
     for line in raw.strip().splitlines():
         line = _QUERY_PREFIX_RE.sub("", line.strip())
-        if line and not line.startswith("[") and line.upper() != "NO_QUERY":
+        # Strip pipe-separated citation suffixes: "... | [source: file.pdf]"
+        line = re.sub(r"\s+\|.*$", "", line).strip()
+        if (line
+                and not line.startswith("[")
+                and line.upper() != "NO_QUERY"
+                and len(line.split()) <= 15
+                and ". " not in line
+                and not line.endswith(".")):
             queries.append(line)
     return queries[:3]
 
