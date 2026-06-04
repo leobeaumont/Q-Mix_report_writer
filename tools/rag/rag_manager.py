@@ -118,7 +118,9 @@ class RAGManager:
             name=collection_name,
             embedding_function=self.emb_fn
         )
-        self._reranker_model_name = "bge-reranker-base"
+        self._reranker_model_name = "BAAI/bge-reranker-base"
+        self._reranker = None
+        self._reranker_tokenizer = None
 
         self._bm25: Optional[object] = None
         self._bm25_ids: List[str] = []
@@ -194,21 +196,23 @@ class RAGManager:
         return [by_id[cid] for cid in sorted(scores, key=scores.__getitem__, reverse=True)]
 
     def _rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
-        base_url = _get_ollama_base_url().rstrip("/")
-        payload = json.dumps({
-            "model": self._reranker_model_name,
-            "query": query,
-            "documents": [c["content"] for c in candidates],
-        }).encode()
-        req = urllib.request.Request(
-            f"{base_url}/api/rerank",
-            data=payload,
-            headers={"Content-Type": "application/json"},
+        if self._reranker is None:
+            import torch
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+            self._reranker_tokenizer = AutoTokenizer.from_pretrained(self._reranker_model_name)
+            self._reranker = AutoModelForSequenceClassification.from_pretrained(self._reranker_model_name)
+            self._reranker.eval()
+        import torch
+        pairs = [[query, c["content"]] for c in candidates]
+        inputs = self._reranker_tokenizer(
+            pairs, padding=True, truncation=True, max_length=512, return_tensors="pt"
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read())
-        ranked = sorted(result["results"], key=lambda x: x["relevance_score"], reverse=True)
-        return [candidates[r["index"]] for r in ranked[:top_k]]
+        with torch.no_grad():
+            scores = self._reranker(**inputs).logits.squeeze(-1).float().tolist()
+        if isinstance(scores, float):
+            scores = [scores]
+        ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+        return [c for _, c in ranked[:top_k]]
 
     def _get_candidates(self, query_text: str, n_candidates: int, distance_threshold: float) -> List[Dict]:
         """Fetch and filter raw candidates from ChromaDB for a single query."""

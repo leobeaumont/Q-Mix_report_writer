@@ -75,7 +75,7 @@ class ReportState(Singleton):
         first_line = text.strip().split("\n")[0] if text.strip() else ""
         title = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
         section_id = f"section_{len(self.sections) + 1}"
-        self.sections.append({"id": section_id, "title": title, "content": text})
+        self.sections.append({"id": section_id, "title": title, "content": text, "sources": list(new_sources or [])})
         self.content = "\n\n".join(s["content"] for s in self.sections)
         self.additions.append(text)
         self.progress = progress
@@ -83,10 +83,12 @@ class ReportState(Singleton):
             self.sources += new_sources
         return section_id
 
-    def replace_section(self, section_id: str, new_content: str) -> bool:
+    def replace_section(self, section_id: str, new_content: str, new_sources: Optional[List] = None) -> bool:
         """Replace an existing section's content in-place.
 
         Also rebuilds self.content so all existing readers stay correct.
+        Merges new_sources into the section's source list (deduplicates by source key)
+        and appends them to the global self.sources list.
         Returns False if section_id is not found.
         """
         for section in self.sections:
@@ -95,6 +97,11 @@ class ReportState(Singleton):
                 if first_line.startswith("#"):
                     section["title"] = first_line.lstrip("#").strip()
                 section["content"] = new_content
+                if new_sources:
+                    existing_keys = {s.get("source") for s in section.get("sources", [])}
+                    deduped = [s for s in new_sources if s.get("source") not in existing_keys]
+                    section.setdefault("sources", []).extend(deduped)
+                    self.sources += deduped
                 self.content = "\n\n".join(s["content"] for s in self.sections)
                 return True
         return False

@@ -28,7 +28,7 @@ from graph.node import Node
 from handcrafted_graph.phases import PhaseConfig, PhaseType, RoundTopology, PHASE_SEQUENCE
 from handcrafted_graph.scheduler import RoundScheduler, SkipStrategy
 from handcrafted_graph.state import PhaseState
-from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace
+from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace, SourceBuffer
 
 logger = logging.getLogger("handcrafted_graph")
 
@@ -132,6 +132,18 @@ class HandcraftedGraph:
         )
         try:
             for phase in writing_phases:
+                if phase.name == PhaseType.DRAFTING:
+                    # Flush sources accumulated during PLANNING and RESEARCH into the
+                    # global bibliography before any section is written. These documents
+                    # informed the outline and evidence synthesis and may be cited in the
+                    # report even if not re-retrieved during a specific drafting round.
+                    pre_draft_sources = SourceBuffer.instance().flush()
+                    if pre_draft_sources:
+                        ReportState.instance().sources += pre_draft_sources
+                        logger.info(
+                            f"[{self.id}] Flushed {len(pre_draft_sources)} pre-draft source(s) "
+                            f"into global bibliography."
+                        )
                 self.phase_state.set_phase(phase.name)
                 logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
                 await self._execute_phase(input, phase, max_tries, max_time, writing_pbar)
@@ -708,7 +720,7 @@ class HandcraftedGraph:
             }
             for name in self.agent_names
         }
-        round_data["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None}
+        round_data["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None, "sources": []}
         if self.collector_id is not None:
             round_data["Collector"]["report_state"] = ReportState.instance().content
         round_data["exec_order"] = []

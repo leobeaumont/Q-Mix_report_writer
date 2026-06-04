@@ -133,6 +133,10 @@ class Researcher(Node):
         documents = self.rag.query_docs_multi(queries)
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
+            execution_trace.trace[-1]["RAG"]["sources"] = [
+                {"id": d["id"], "source": d["source"], "page": d.get("page", "N/A")}
+                for d in documents
+            ]
 
         if not documents:
             signal = "[RESEARCH_EXHAUSTED] RAG returned no documents for this query."
@@ -205,6 +209,10 @@ class Researcher(Node):
         documents = self.rag.query_docs_multi(queries)
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
+            execution_trace.trace[-1]["RAG"]["sources"] = [
+                {"id": d["id"], "source": d["source"], "page": d.get("page", "N/A")}
+                for d in documents
+            ]
 
         if not documents:
             signal = "[RESEARCH_EXHAUSTED] RAG returned no documents for this query."

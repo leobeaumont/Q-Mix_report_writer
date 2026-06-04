@@ -130,7 +130,7 @@ class Collector(Node):
                 logger.error(
                     "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
                 )
-            elif self.report.replace_section(section_id, response1):
+            elif self.report.replace_section(section_id, response1, new_sources):
                 self.report.progress = response2
             else:
                 logger.error(
@@ -174,7 +174,7 @@ class Collector(Node):
                 logger.error(
                     "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
                 )
-            elif self.report.replace_section(section_id, response1):
+            elif self.report.replace_section(section_id, response1, new_sources):
                 self.report.progress = response2
             else:
                 logger.error(
