@@ -119,16 +119,48 @@ class HandcraftedGraph:
         tokens_before = PromptTokens.instance().value + CompletionTokens.instance().value
         self.phase_state.reset()
 
-        total_rounds = sum(p.max_rounds for p in self.phases)
-        overall_pbar = tqdm(total=total_rounds, desc="Report progress", unit="round", leave=True)
+        writing_phases    = [p for p in self.phases if not p.section_aware
+                             and p.name != PhaseType.VALIDATION]
+        correction_phases = [p for p in self.phases if p.section_aware
+                             or p.name == PhaseType.VALIDATION]
 
+        # ── Bar 1: Writing (PLANNING → RESEARCH → DRAFTING) ───────────────
+        # Total is fully known upfront — no patching needed mid-run.
+        writing_total = sum(p.max_rounds for p in writing_phases)
+        writing_pbar = tqdm(
+            total=writing_total, desc="Writing report", unit="round", leave=True
+        )
         try:
-            for phase in self.phases:
+            for phase in writing_phases:
                 self.phase_state.set_phase(phase.name)
                 logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
-                await self._execute_phase(input, phase, max_tries, max_time, overall_pbar)
+                await self._execute_phase(input, phase, max_tries, max_time, writing_pbar)
         finally:
-            overall_pbar.close()
+            writing_pbar.close()
+
+        # ── Transition notice ─────────────────────────────────────────────
+        n_sections = len(ReportState.instance().sections)
+        tqdm.write(
+            f"\n  Writing complete — {n_sections} section(s) drafted."
+            f"  Starting review & correction phase…\n"
+        )
+
+        # ── Bar 2: Correction (SECTION_REVIEW → VALIDATION) ──────────────
+        # Total is now exact: we know n_sections, so no patching at runtime.
+        correction_total = sum(
+            p.max_rounds * n_sections if p.section_aware else p.max_rounds
+            for p in correction_phases
+        )
+        correction_pbar = tqdm(
+            total=correction_total, desc="Review & correction", unit="round", leave=True
+        )
+        try:
+            for phase in correction_phases:
+                self.phase_state.set_phase(phase.name)
+                logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
+                await self._execute_phase(input, phase, max_tries, max_time, correction_pbar)
+        finally:
+            correction_pbar.close()
 
         report = ReportState.instance().content
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
@@ -156,6 +188,12 @@ class HandcraftedGraph:
             skip_strategy=self.skip_strategy,
             llm=self._get_any_llm(),
         )
+
+        if phase.section_aware:
+            await self._execute_section_aware_phase(
+                input, phase, scheduler, max_tries, max_time, overall_pbar
+            )
+            return
 
         n_patterns = len(phase.round_topologies)
 
@@ -225,14 +263,115 @@ class HandcraftedGraph:
                 ReportState.instance().task = "[WAITING FOR NEXT PHASE DIRECTIVE]"
                 break
 
-            if ReportState.instance().task == "[REVISION_COMPLETE]":
+    async def _execute_section_aware_phase(
+        self,
+        input: Dict[str, str],
+        phase: PhaseConfig,
+        scheduler: RoundScheduler,
+        max_tries: int,
+        max_time: int,
+        overall_pbar: Optional[tqdm] = None,
+    ) -> None:
+        """Execute a section-aware phase by iterating ReportState.sections in order.
+
+        For each section:
+          - Round A (index 0): review round — Reviewer audits the section text.
+          - Round B (index 1): revision round — skipped when Reviewer signals
+            [NO_REVISION_NEEDED]; otherwise DataAnalyst + Collector apply
+            corrections in-place via replace_section().
+
+        Memory is cleared between sections to prevent cross-section contamination.
+        Within a section's two-round cycle it is preserved so the Reviewer's
+        temporal self-edge carries the critique into the revision round.
+        """
+        report_state = ReportState.instance()
+        sections = report_state.sections
+        n_sections = len(sections)
+
+        if n_sections == 0:
+            logger.warning(f"Phase '{phase.name.value}': no sections to review — skipping.")
+            return
+
+        review_topology = phase.round_topologies[0]
+        revision_topology = phase.round_topologies[1]
+
+        for i, section in enumerate(sections):
+            report_state.review_section_idx = i
+            self._clear_all_memory()  # clean slate for this section
+
+            # ---- Round A: review ----------------------------------------
+            if overall_pbar is not None:
+                overall_pbar.set_description(
+                    f"[{phase.name.value.upper()}] section {i + 1}/{n_sections} — review"
+                )
+
+            active_agents = await scheduler.get_active_agents(
+                review_topology, 0, task_input=input
+            )
+            logger.info(
+                f"  [{phase.name.value}] Section {i + 1}/{n_sections} review: "
+                f"active={sorted(active_agents)}"
+            )
+
+            self._build_topology(review_topology, active_agents)
+            self._connect_temporal()
+
+            if self.execution_trace is not None:
+                self._init_trace_round()
+                self._trace_spatial_edges()
+
+            await self._execute_round(input, active_agents, max_tries, max_time)
+            self._update_memory()
+            self._clear_spatial()
+            self.phase_state.increment_round()
+
+            if overall_pbar is not None:
+                overall_pbar.update(1)
+
+            # ---- Check if revision is needed ----------------------------
+            reviewer_node = self._get_node_by_name("Reviewer")
+            reviewer_output = (
+                str(reviewer_node.outputs[-1] or "")
+                if reviewer_node and reviewer_node.outputs
+                else ""
+            )
+            if "[NO_REVISION_NEEDED]" in reviewer_output:
                 logger.info(
-                    f"Phase '{phase.name.value}' completed early at round {round_idx}: "
-                    f"[REVISION_COMPLETE] signal received."
+                    f"  [{phase.name.value}] Section {i + 1}/{n_sections}: "
+                    f"no revision needed — skipping."
                 )
                 if overall_pbar is not None:
-                    overall_pbar.update(phase.max_rounds - round_idx - 1)
-                break
+                    overall_pbar.update(1)  # account for skipped revision round
+                continue
+
+            # ---- Round B: revision --------------------------------------
+            if overall_pbar is not None:
+                overall_pbar.set_description(
+                    f"[{phase.name.value.upper()}] section {i + 1}/{n_sections} — revision"
+                )
+
+            active_agents = await scheduler.get_active_agents(
+                revision_topology, 1, task_input=input
+            )
+            logger.info(
+                f"  [{phase.name.value}] Section {i + 1}/{n_sections} revision: "
+                f"active={sorted(active_agents)}"
+            )
+
+            self._build_topology(revision_topology, active_agents)
+            self._connect_temporal()
+
+            if self.execution_trace is not None:
+                self._init_trace_round()
+                self._trace_spatial_edges()
+
+            await self._execute_round(input, active_agents, max_tries, max_time)
+            self._update_memory()
+            self._clear_spatial()
+            self.phase_state.increment_round()
+
+            if overall_pbar is not None:
+                overall_pbar.update(1)
 
     async def _execute_round(
         self,

@@ -48,17 +48,17 @@ PHASE_CONTEXT: dict[PhaseType, str] = {
         "Work on exactly one section per cycle. "
         "The Collector will produce the final prose; other agents supply structured input."
     ),
-    PhaseType.REVIEW: (
-        "### Pipeline Phase: REVIEW\n"
-        "The team is auditing the complete draft. "
-        "Focus on factual accuracy, logical coherence, and scientific rigour. "
-        "Generate specific, actionable feedback — do not rewrite content directly."
+    PhaseType.SECTION_REVIEW: (
+        "### Pipeline Phase: SECTION REVIEW\n"
+        "The team is reviewing and revising one section at a time. "
+        "Each agent focuses exclusively on the single section currently shown — "
+        "do not comment on or modify any other section of the report."
     ),
-    PhaseType.REVISION: (
-        "### Pipeline Phase: REVISION\n"
-        "The team is applying corrections identified during review. "
-        "Target only the flagged issues. Avoid introducing new content outside the scope "
-        "of the reviewer's feedback."
+    PhaseType.VALIDATION: (
+        "### Pipeline Phase: VALIDATION\n"
+        "The team is performing a final global quality check on the complete report. "
+        "Focus exclusively on cross-section issues: flow, transitions between sections, "
+        "duplicated content, and global coherence. Do not rewrite content directly."
     ),
 }
 
@@ -174,57 +174,54 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "or any pipeline-internal details — the report is a scientific document, "
         "not a process log."
     ),
-    # REVIEW
-    (PhaseType.REVIEW, "Reviewer"): (
-        "Perform a full audit of the report draft. For each issue, state: "
-        "(1) the location, (2) the specific problem, (3) the correction required. "
-        "Score each section on logic, verifiability, and precision."
+    # SECTION_REVIEW — review round
+    (PhaseType.SECTION_REVIEW, "Reviewer"): (
+        "Audit ONLY the section shown under '### Section Content'. "
+        "Do not comment on any other section of the report. "
+        "If the section is factually correct, logically coherent, and scientifically "
+        "rigorous, output ONLY `[NO_REVISION_NEEDED]` and nothing else. "
+        "Otherwise, for each issue state: (1) the specific problem, "
+        "(2) the exact correction required. Be concise and actionable."
     ),
-    (PhaseType.REVIEW, "Lead Architect"): (
-        "Receive the reviewer's critique and decide which issues require revision. "
-        "Set the team objective to the highest-priority correction."
+    # SECTION_REVIEW — revision round
+    (PhaseType.SECTION_REVIEW, "Data Analyst"): (
+        "Prepare corrected content for the section currently under review. "
+        "Output a structured Markdown list containing ONLY claims directly "
+        "supported by RAG evidence — omit anything the Reviewer flagged as unverifiable. "
+        "If no RAG evidence supports any claim, output `[NO SUPPORTED CONTENT]` and nothing else."
     ),
-    # REVISION
-    (PhaseType.REVISION, "Lead Architect"): (
-        "Direct DataAnalyst to prepare corrected content for the specific section "
-        "flagged by the Reviewer. Scope the correction narrowly. "
-        "Reference the exact section ID from the report section list above "
-        "(e.g., 'correct section_2'). "
-        "IMPORTANT: If the 'Current Team Objective' reads "
-        "`[CORRECTION_APPLIED — ASSIGN NEXT CORRECTION]`, the previous correction "
-        "was successfully applied. Check your previous output and the Reviewer's "
-        "critique for any remaining unfixed issues and assign the next section to "
-        "correct. If all flagged issues have been addressed, output only "
-        "`[REVISION_COMPLETE]` and nothing else."
-    ),
-    (PhaseType.REVISION, "Data Analyst"): (
-        "Prepare corrected content for the section flagged by the Reviewer. "
-        "REQUIRED: Begin your output with `[SECTION_ID: section_X]` "
-        "(using the exact ID from the section list above). "
-        "Then output a structured Markdown list containing ONLY claims directly "
-        "supported by RAG evidence — simply omit anything the Reviewer flagged as "
-        "unverifiable. Do not quote or reference the removed claims. "
-        "If no RAG evidence supports any claim for this section, output "
-        "`[SECTION_ID: section_X]` followed by `[NO SUPPORTED CONTENT]` and nothing else."
-    ),
-    (PhaseType.REVISION, "Researcher"): (
+    (PhaseType.SECTION_REVIEW, "Researcher"): (
         "Read DataAnalyst's message in '### Received messages'. "
         "If it contains one or more 'State Deficiency' entries, run a targeted "
         "RAG query for each flagged item and forward the retrieved evidence. "
         "If DataAnalyst's message contains no State Deficiency entries, "
-        "output nothing — do not add unsolicited evidence."
+        "output `[HOLD]` — do not add unsolicited evidence."
     ),
-    (PhaseType.REVISION, "Collector"): (
-        "Rewrite the flagged section using the corrected content from DataAnalyst. "
-        "Parse the `[SECTION_ID: section_X]` tag at the top of DataAnalyst's message "
-        "to identify which section to replace. "
-        "The rewritten section will replace the original in-place — do not append. "
+    (PhaseType.SECTION_REVIEW, "Collector"): (
+        "Rewrite the section shown under '### Current Section' in full, starting with "
+        "its Markdown heading, using DataAnalyst's corrected content as your source. "
+        "Do NOT append a new section — produce a complete replacement of the shown text. "
         "If DataAnalyst's output is `[NO SUPPORTED CONTENT]`, output nothing — "
-        "leave the section unchanged rather than filling it with meta-commentary. "
+        "leave the section unchanged rather than adding meta-commentary. "
         "Do NOT write any sentence that references 'the next section', 'the following "
         "section', 'the subsequent section', or previews future content. "
         "CRITICAL: Do NOT write about the retrieval process, the RAG system, the absence "
         "of data, or any pipeline-internal details."
+    ),
+    # VALIDATION
+    (PhaseType.VALIDATION, "Reviewer"): (
+        "Read the full report and identify ONLY cross-section quality issues: "
+        "abrupt transitions, duplicated content between sections, broken narrative flow, "
+        "or contradictions between sections. "
+        "Do NOT repeat section-level factual checks — those were already done. "
+        "For each issue, state the affected sections and the specific problem. "
+        "If the report reads well globally, state so briefly."
+    ),
+    (PhaseType.VALIDATION, "Lead Architect"): (
+        "Receive the Reviewer's global quality notes and write a brief validation "
+        "conclusion (2-4 sentences). Summarise the overall quality of the report "
+        "and list any critical remaining concerns. This is a diagnostic output only — "
+        "do not trigger further rewrites."
     ),
 }
 
@@ -262,10 +259,23 @@ class HandcraftedPromptSet(PromptSet):
         if objective:
             block += f"**Your objective this round:** {objective}\n"
 
-        # Show section IDs in REVIEW and REVISION so agents can target corrections.
-        if phase in (PhaseType.REVIEW, PhaseType.REVISION):
+        # Inject section context so agents never have to guess or hallucinate IDs.
+        if phase == PhaseType.SECTION_REVIEW:
             from utils.globals import ReportState
-            block += f"\n**Report sections (use IDs for targeted corrections):**\n"
+            report_state = ReportState.instance()
+            idx = report_state.review_section_idx
+            sections = report_state.sections
+            if 0 <= idx < len(sections):
+                section = sections[idx]
+                block += (
+                    f"\n**Current section under review:**\n"
+                    f"  ID: `{section['id']}` | Title: {section['title'] or '(untitled)'} "
+                    f"| Section {idx + 1} of {len(sections)}\n"
+                )
+
+        if phase == PhaseType.VALIDATION:
+            from utils.globals import ReportState
+            block += f"\n**Report sections:**\n"
             block += ReportState.instance().list_sections(verbose=True) + "\n"
 
         return block

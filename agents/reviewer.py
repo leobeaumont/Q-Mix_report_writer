@@ -16,30 +16,50 @@ class Reviewer(Node):
         self.role = role or "Reviewer"
         self.report = ReportState.instance()
 
-    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
-        system_prompt = self.prompt_set.get_description(self.role)
-        system_prompt += self.prompt_set.get_constraint(self.role)
-        # Reviewer needs the report text for auditing, but capped to avoid
-        # context overflow on small models.
-        # Strategy: show head + tail so both early duplicate sections and
-        # recent content are visible. If the report fits, show all of it.
+    def _is_section_review_phase(self) -> bool:
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            return PhaseState.instance().current_phase == PhaseType.SECTION_REVIEW
+        except Exception:
+            return False
+
+    def _get_review_content(self) -> tuple:
+        """Return (report_label, report_content) appropriate for the current phase.
+
+        SECTION_REVIEW: single section text — no truncation needed.
+        All other phases: full report with head+tail cap for context safety.
+        """
+        if self._is_section_review_phase():
+            idx = self.report.review_section_idx
+            sections = self.report.sections
+            if 0 <= idx < len(sections):
+                section = sections[idx]
+                header = f"Section ID: {section['id']} | Title: {section['title'] or '(untitled)'}\n\n"
+                return "Section Content", header + section["content"]
+            return "Section Content", "[No section content available]"
+
+        # Full-report path: head + tail truncation
         _MAX_CHARS = 6000
         _HALF = _MAX_CHARS // 2
         full = self.report.content or self.report.progress
         if len(full) <= _MAX_CHARS:
-            report_content = full
-        else:
-            head = full[:_HALF]
-            tail = full[-_HALF:]
-            omitted = len(full) - _MAX_CHARS
-            report_content = (
-                head
-                + f"\n\n[...{omitted} chars omitted — showing head and tail...]\n\n"
-                + tail
-            )
+            return "Full Report Content", full
+        head = full[:_HALF]
+        tail = full[-_HALF:]
+        omitted = len(full) - _MAX_CHARS
+        return (
+            "Full Report Content",
+            head + f"\n\n[...{omitted} chars omitted — showing head and tail...]\n\n" + tail,
+        )
+
+    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
+        system_prompt = self.prompt_set.get_description(self.role)
+        system_prompt += self.prompt_set.get_constraint(self.role)
+        report_label, report_content = self._get_review_content()
         user_prompt = self._build_user_prompt(
             raw_inputs, spatial_info, temporal_info,
-            "Full Report Content", report_content,
+            report_label, report_content,
             **kwargs,
         )
         return system_prompt, user_prompt

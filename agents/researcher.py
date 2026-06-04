@@ -61,7 +61,7 @@ class Researcher(Node):
         try:
             from handcrafted_graph.state import PhaseState
             from handcrafted_graph.phases import PhaseType
-            return PhaseState.instance().current_phase == PhaseType.REVISION
+            return PhaseState.instance().current_phase == PhaseType.SECTION_REVIEW
         except Exception:
             return False
 

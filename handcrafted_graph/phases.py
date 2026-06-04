@@ -27,8 +27,8 @@ class PhaseType(Enum):
     PLANNING = "planning"
     RESEARCH = "research"
     DRAFTING = "drafting"
-    REVIEW = "review"
-    REVISION = "revision"
+    SECTION_REVIEW = "section_review"
+    VALIDATION = "validation"
 
 
 # ---------------------------------------------------------------------------
@@ -63,13 +63,20 @@ class PhaseConfig:
         round_topologies: Ordered list of RoundTopology patterns. The last
                           pattern repeats when round_idx >= len(patterns).
         max_rounds: Hard upper bound on rounds before forced transition.
+                    For section_aware phases this is rounds *per section*
+                    (review round + optional revision round = 2).
         next_phase: Which phase follows; None means end of pipeline.
+        section_aware: When True, HandcraftedGraph delegates execution to
+                       _execute_section_aware_phase which iterates
+                       ReportState.sections in order rather than running a
+                       fixed number of rounds.
     """
     name: PhaseType
     description: str
     round_topologies: List[RoundTopology]
     max_rounds: int
     next_phase: Optional[PhaseType] = None
+    section_aware: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +157,7 @@ DRAFTING_PHASE = PhaseConfig(
         "Collector writes and appends the polished section to the report."
     ),
     max_rounds=10,
-    next_phase=PhaseType.REVIEW,
+    next_phase=PhaseType.SECTION_REVIEW,
     round_topologies=[
         # Round A: LeadArchitect designates the section, Researcher fetches fresh RAG
         # context, DataAnalyst structures content. Researcher is required so DataAnalyst
@@ -176,64 +183,63 @@ DRAFTING_PHASE = PhaseConfig(
 )
 
 
-REVIEW_PHASE = PhaseConfig(
-    name=PhaseType.REVIEW,
+SECTION_REVIEW_PHASE = PhaseConfig(
+    name=PhaseType.SECTION_REVIEW,
     description=(
-        "Reviewer audits the full report draft for factual accuracy, logical "
-        "coherence, and scientific rigour. Feedback is forwarded to LeadArchitect "
-        "to determine whether a revision pass is warranted."
+        "Per-section review and targeted revision. The Reviewer audits one section "
+        "at a time; DataAnalyst and Collector apply corrections in-place. Sections "
+        "that pass review are skipped without a revision round."
     ),
-    max_rounds=2,
-    next_phase=PhaseType.REVISION,
+    section_aware=True,
+    max_rounds=2,  # rounds per section: 1 review + 1 optional revision
+    next_phase=PhaseType.VALIDATION,
     round_topologies=[
-        # Round 0: Reviewer reads the full report and generates structured feedback.
+        # Round A (review): Reviewer reads the single section and produces
+        # structured feedback, or outputs [NO_REVISION_NEEDED] if the section
+        # is already correct. Output is stored in temporal memory.
         RoundTopology(
             required_agents=["Reviewer"],
             optional_agents=[],
-            edges=[],  # Reviewer output is stored in temporal memory for next round
+            edges=[],
         ),
-        # Round 1: Reviewer forwards critique to LeadArchitect.
+        # Round B (revision): DataAnalyst receives Reviewer critique via the
+        # temporal self-edge (Reviewer ran last round so TEMPORAL_HEURISTIC
+        # includes it as optional here). Collector rewrites the section in-place.
         RoundTopology(
-            required_agents=["Reviewer", "LeadArchitect"],
-            optional_agents=[],
+            required_agents=["DataAnalyst", "Collector"],
+            optional_agents=["Reviewer", "Researcher"],
             edges=[
-                ("Reviewer", "LeadArchitect"),     # Structured critique
+                ("Reviewer", "DataAnalyst"),    # Critique → correction context
+                ("Researcher", "DataAnalyst"),  # Evidence gap fill
+                ("DataAnalyst", "Collector"),   # Corrected content
             ],
         ),
     ],
 )
 
 
-REVISION_PHASE = PhaseConfig(
-    name=PhaseType.REVISION,
+VALIDATION_PHASE = PhaseConfig(
+    name=PhaseType.VALIDATION,
     description=(
-        "LeadArchitect applies reviewer feedback. DataAnalyst prepares corrected "
-        "content and flags evidence gaps; Researcher retrieves missing evidence "
-        "when gaps are flagged; Collector rewrites the corrected section in-place."
+        "Global quality check on the finished report. Reviewer reads the full "
+        "report and flags cross-section issues (flow, transitions, duplications). "
+        "LeadArchitect writes a brief validation conclusion."
     ),
-    max_rounds=12,  # 2 rounds per section × up to 6 corrections; [REVISION_COMPLETE]
-                    # exits early so unused rounds are never consumed.
+    max_rounds=2,
     next_phase=None,  # End of pipeline
     round_topologies=[
-        # Round A: LeadArchitect issues correction directive; DataAnalyst runs first
-        # and may flag evidence gaps; Researcher runs after (topological order enforced
-        # by the DataAnalyst→Researcher edge) and can read those gap flags directly.
+        # Round 0: Reviewer reads the full report and produces global notes.
         RoundTopology(
-            required_agents=["LeadArchitect", "DataAnalyst"],
-            optional_agents=["Researcher"],
-            edges=[
-                ("LeadArchitect", "DataAnalyst"),  # Correction directive
-                ("DataAnalyst", "Researcher"),     # Gap flags → Researcher reacts
-            ],
+            required_agents=["Reviewer"],
+            optional_agents=[],
+            edges=[],
         ),
-        # Round B: Researcher forwards retrieved evidence to DataAnalyst for final
-        # synthesis; Collector rewrites the flagged section in-place.
+        # Round 1: Reviewer forwards notes to LeadArchitect for a brief conclusion.
         RoundTopology(
-            required_agents=["DataAnalyst", "Collector"],
-            optional_agents=["Researcher"],
+            required_agents=["Reviewer", "LeadArchitect"],
+            optional_agents=[],
             edges=[
-                ("Researcher", "DataAnalyst"),     # Retrieved evidence (if any gaps)
-                ("DataAnalyst", "Collector"),      # Corrected final content
+                ("Reviewer", "LeadArchitect"),  # Global quality notes
             ],
         ),
     ],
@@ -248,8 +254,8 @@ PHASE_SEQUENCE: List[PhaseConfig] = [
     PLANNING_PHASE,
     RESEARCH_PHASE,
     DRAFTING_PHASE,
-    REVIEW_PHASE,
-    REVISION_PHASE,
+    SECTION_REVIEW_PHASE,
+    VALIDATION_PHASE,
 ]
 
 PHASE_MAP: dict[PhaseType, PhaseConfig] = {p.name: p for p in PHASE_SEQUENCE}

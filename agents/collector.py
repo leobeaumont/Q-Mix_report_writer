@@ -30,12 +30,28 @@ class Collector(Node):
         self.report = ReportState.instance()
         self.source_buffer = SourceBuffer.instance()
 
+    def _get_section_content(self) -> tuple:
+        """Return (label, content) for the report section to show in the prompt.
+
+        SECTION_REVIEW: show the exact section being revised so the Collector
+        knows what it is replacing (not necessarily the last written section).
+        All other phases: show the last written section as a continuation cue.
+        """
+        if self._is_revision_phase():
+            idx = self.report.review_section_idx
+            sections = self.report.sections
+            if 0 <= idx < len(sections):
+                return "Current Section", sections[idx]["content"]
+            return "Current Section", "[No section content available]"
+        return "Previous Text Production", self.report.get_last()
+
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
+        label, content = self._get_section_content()
         user_prompt = self._build_user_prompt(
             raw_inputs, spatial_info, temporal_info,
-            "Previous Text Production", self.report.get_last(),
+            label, content,
             **kwargs,
         )
         return system_prompt, user_prompt
@@ -44,7 +60,7 @@ class Collector(Node):
         try:
             from handcrafted_graph.state import PhaseState
             from handcrafted_graph.phases import PhaseType
-            return PhaseState.instance().current_phase == PhaseType.REVISION
+            return PhaseState.instance().current_phase == PhaseType.SECTION_REVIEW
         except Exception:
             return False
 
@@ -61,34 +77,27 @@ class Collector(Node):
             output = str(info.get("output", ""))
             for line in output.splitlines():
                 line = line.strip()
-                if not line or line.startswith("[SECTION_ID:"):
+                if not line:
                     continue
                 if not _ABSENCE_RE.search(line):
                     return True   # at least one positive evidence line
             return False          # DataAnalyst present but every line is an absence marker
         return True               # DataAnalyst not in spatial_info — don't block
 
-    def _extract_section_id(self, spatial_info: dict) -> str:
-        """Parse [SECTION_ID: section_X] tag emitted by DataAnalyst during REVISION."""
-        for info in spatial_info.values():
-            match = re.search(
-                r'\[SECTION_ID:\s*(section_\d+)\]',
-                str(info.get("output", "")),
-                re.IGNORECASE,
-            )
-            if match:
-                return match.group(1)
-        return ""
+    def _extract_section_id_from_review_index(self) -> str:
+        """Resolve the target section ID from ReportState.review_section_idx.
 
-    def _extract_section_id_from_task(self) -> str:
-        """Fallback: parse a section_X ID from the current LeadArchitect task directive.
-
-        Used when DataAnalyst omits the mandatory [SECTION_ID] tag. The LeadArchitect
-        sets ReportState.task to a directive such as 'correct section_2', so a
-        section_N pattern is reliably present when the REVISION phase is on track.
+        The index is set deterministically by the graph loop before each revision
+        round — section targeting never depends on LLM output.
         """
-        match = re.search(r"section_\d+", self.report.task, re.IGNORECASE)
-        return match.group(0).lower() if match else ""
+        try:
+            idx = self.report.review_section_idx
+            sections = self.report.sections
+            if 0 <= idx < len(sections):
+                return sections[idx]["id"]
+        except Exception:
+            pass
+        return ""
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:  # If no agent appended, the collector stays idle
@@ -114,25 +123,18 @@ class Collector(Node):
 
         new_sources = self.source_buffer.flush()
         if self._is_revision_phase():
-            section_id = self._extract_section_id(spatial_info)
+            # Section targeting is always resolved by the pipeline (review_section_idx),
+            # never by parsing LLM output — this eliminates wrong-section replacements.
+            section_id = self._extract_section_id_from_review_index()
             if not section_id:
-                section_id = self._extract_section_id_from_task()
-                if section_id:
-                    logger.warning(
-                        "REVISION: DataAnalyst omitted [SECTION_ID] tag; "
-                        f"falling back to '{section_id}' from task directive."
-                    )
-                else:
-                    logger.error(
-                        "REVISION: DataAnalyst omitted [SECTION_ID] tag and no section ID "
-                        "could be inferred from the task directive — correction skipped."
-                    )
-            if section_id and self.report.replace_section(section_id, response1):
-                self.report.progress = response2
-                self.report.task = "[CORRECTION_APPLIED — ASSIGN NEXT CORRECTION]"
-            elif section_id:
                 logger.error(
-                    f"REVISION: section '{section_id}' not found in report — correction skipped."
+                    "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
+                )
+            elif self.report.replace_section(section_id, response1):
+                self.report.progress = response2
+            else:
+                logger.error(
+                    f"SECTION_REVIEW: section '{section_id}' not found in report — correction skipped."
                 )
         else:
             self.report.append(response1, response2, new_sources)
@@ -165,25 +167,18 @@ class Collector(Node):
 
         new_sources = self.source_buffer.flush()
         if self._is_revision_phase():
-            section_id = self._extract_section_id(spatial_info)
+            # Section targeting is always resolved by the pipeline (review_section_idx),
+            # never by parsing LLM output — this eliminates wrong-section replacements.
+            section_id = self._extract_section_id_from_review_index()
             if not section_id:
-                section_id = self._extract_section_id_from_task()
-                if section_id:
-                    logger.warning(
-                        "REVISION: DataAnalyst omitted [SECTION_ID] tag; "
-                        f"falling back to '{section_id}' from task directive."
-                    )
-                else:
-                    logger.error(
-                        "REVISION: DataAnalyst omitted [SECTION_ID] tag and no section ID "
-                        "could be inferred from the task directive — correction skipped."
-                    )
-            if section_id and self.report.replace_section(section_id, response1):
-                self.report.progress = response2
-                self.report.task = "[CORRECTION_APPLIED — ASSIGN NEXT CORRECTION]"
-            elif section_id:
                 logger.error(
-                    f"REVISION: section '{section_id}' not found in report — correction skipped."
+                    "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
+                )
+            elif self.report.replace_section(section_id, response1):
+                self.report.progress = response2
+            else:
+                logger.error(
+                    f"SECTION_REVIEW: section '{section_id}' not found in report — correction skipped."
                 )
         else:
             self.report.append(response1, response2, new_sources)

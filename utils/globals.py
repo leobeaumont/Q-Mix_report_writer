@@ -47,6 +47,7 @@ class ReportState(Singleton):
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
         self.deficient_topics: List[str] = []  # topics absent from the knowledge base
+        self.review_section_idx: int = 0  # current section index during SECTION_REVIEW
 
     def reset(self):
         self.content = ""
@@ -56,6 +57,7 @@ class ReportState(Singleton):
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
         self.deficient_topics = []
+        self.review_section_idx = 0
 
     def add_deficiency(self, topic: str) -> None:
         """Record a topic the Researcher confirmed is absent from the knowledge base."""

@@ -15,8 +15,20 @@ be opened with:
 
 import os
 import sys
+import warnings
+import logging
 import argparse
 import asyncio
+
+# ── Silence noisy third-party startup messages ────────────────────────────
+# Must be set before project imports so lazy-loaded models inherit the levels.
+warnings.filterwarnings("ignore", message=".*pkg_resources.*")
+warnings.filterwarnings("ignore", message=".*unauthenticated.*")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+for _logger in ("transformers", "huggingface_hub", "accelerate"):
+    logging.getLogger(_logger).setLevel(logging.ERROR)
+# ──────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
