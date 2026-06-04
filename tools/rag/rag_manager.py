@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import urllib.request
 import chromadb
@@ -119,9 +118,7 @@ class RAGManager:
             name=collection_name,
             embedding_function=self.emb_fn
         )
-        self._reranker = None
-        self._reranker_tokenizer = None
-        self._reranker_model_name = "BAAI/bge-reranker-base"
+        self._reranker_model_name = "bge-reranker-base"
 
         self._bm25: Optional[object] = None
         self._bm25_ids: List[str] = []
@@ -197,42 +194,21 @@ class RAGManager:
         return [by_id[cid] for cid in sorted(scores, key=scores.__getitem__, reverse=True)]
 
     def _rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
-        if self._reranker is None:
-            import torch
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
-            # Suppress model-load noise at the file-descriptor level.
-            # contextlib.redirect_* only patches sys.stdout/stderr (Python objects);
-            # the safetensors Rust extension and huggingface_hub write directly to
-            # fd 1 / fd 2, bypassing Python's I/O layer entirely.
-            import sys
-            sys.stdout.flush()
-            sys.stderr.flush()
-            _devnull = os.open(os.devnull, os.O_WRONLY)
-            _saved_out = os.dup(1)
-            _saved_err = os.dup(2)
-            try:
-                os.dup2(_devnull, 1)
-                os.dup2(_devnull, 2)
-                self._reranker_tokenizer = AutoTokenizer.from_pretrained(self._reranker_model_name)
-                self._reranker = AutoModelForSequenceClassification.from_pretrained(self._reranker_model_name)
-            finally:
-                os.dup2(_saved_out, 1)
-                os.dup2(_saved_err, 2)
-                os.close(_saved_out)
-                os.close(_saved_err)
-                os.close(_devnull)
-            self._reranker.eval()
-        import torch
-        pairs = [[query, c["content"]] for c in candidates]
-        inputs = self._reranker_tokenizer(
-            pairs, padding=True, truncation=True, max_length=512, return_tensors="pt"
+        base_url = _get_ollama_base_url().rstrip("/")
+        payload = json.dumps({
+            "model": self._reranker_model_name,
+            "query": query,
+            "documents": [c["content"] for c in candidates],
+        }).encode()
+        req = urllib.request.Request(
+            f"{base_url}/api/rerank",
+            data=payload,
+            headers={"Content-Type": "application/json"},
         )
-        with torch.no_grad():
-            scores = self._reranker(**inputs).logits.squeeze(-1).float().tolist()
-        if isinstance(scores, float):
-            scores = [scores]
-        ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
-        return [c for _, c in ranked[:top_k]]
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        ranked = sorted(result["results"], key=lambda x: x["relevance_score"], reverse=True)
+        return [candidates[r["index"]] for r in ranked[:top_k]]
 
     def _get_candidates(self, query_text: str, n_candidates: int, distance_threshold: float) -> List[Dict]:
         """Fetch and filter raw candidates from ChromaDB for a single query."""
