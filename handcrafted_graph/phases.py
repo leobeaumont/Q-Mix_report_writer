@@ -70,6 +70,13 @@ class PhaseConfig:
                        _execute_section_aware_phase which iterates
                        ReportState.sections in order rather than running a
                        fixed number of rounds.
+        window_aware: When True, HandcraftedGraph delegates execution to
+                      _execute_window_aware_phase which slides a window of
+                      window_size chars (with window_overlap_sections overlap)
+                      over ReportState.sections, then runs one synthesis round.
+        window_size: Maximum characters per window (window_aware phases only).
+        window_overlap_sections: Number of sections shared between consecutive
+                      windows to preserve cross-boundary context.
     """
     name: PhaseType
     description: str
@@ -77,6 +84,9 @@ class PhaseConfig:
     max_rounds: int
     next_phase: Optional[PhaseType] = None
     section_aware: bool = False
+    window_aware: bool = False
+    window_size: int = 6000
+    window_overlap_sections: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -221,25 +231,30 @@ SECTION_REVIEW_PHASE = PhaseConfig(
 VALIDATION_PHASE = PhaseConfig(
     name=PhaseType.VALIDATION,
     description=(
-        "Global quality check on the finished report. Reviewer reads the full "
-        "report and flags cross-section issues (flow, transitions, duplications). "
-        "LeadArchitect writes a brief validation conclusion."
+        "Global quality check using a sliding window over the report sections. "
+        "Each window pass has the Reviewer audit a subset of adjacent sections for "
+        "cross-section issues (transitions, flow, duplications). A final synthesis "
+        "round consolidates all window findings into a quality conclusion."
     ),
-    max_rounds=2,
+    window_aware=True,
+    window_size=6000,
+    window_overlap_sections=1,
+    max_rounds=2,  # informational only; actual rounds = n_windows + 1 (synthesis)
     next_phase=None,  # End of pipeline
     round_topologies=[
-        # Round 0: Reviewer reads the full report and produces global notes.
+        # Index 0 (window review): Reviewer audits one window of sections.
         RoundTopology(
             required_agents=["Reviewer"],
             optional_agents=[],
             edges=[],
         ),
-        # Round 1: Reviewer forwards notes to LeadArchitect for a brief conclusion.
+        # Index 1 (synthesis): Reviewer + LeadArchitect see all accumulated
+        # window notes and produce a consolidated quality conclusion.
         RoundTopology(
             required_agents=["Reviewer", "LeadArchitect"],
             optional_agents=[],
             edges=[
-                ("Reviewer", "LeadArchitect"),  # Global quality notes
+                ("Reviewer", "LeadArchitect"),  # Synthesised quality notes
             ],
         ),
     ],

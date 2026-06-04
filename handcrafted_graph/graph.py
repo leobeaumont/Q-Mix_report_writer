@@ -146,11 +146,19 @@ class HandcraftedGraph:
         )
 
         # ── Bar 2: Correction (SECTION_REVIEW → VALIDATION) ──────────────
-        # Total is now exact: we know n_sections, so no patching at runtime.
-        correction_total = sum(
-            p.max_rounds * n_sections if p.section_aware else p.max_rounds
-            for p in correction_phases
-        )
+        # Total is now exact: we know n_sections (and can build windows) upfront.
+        sections = ReportState.instance().sections
+        correction_total = 0
+        for p in correction_phases:
+            if p.section_aware:
+                correction_total += p.max_rounds * n_sections
+            elif p.window_aware:
+                windows = self._build_section_windows(
+                    sections, p.window_size, p.window_overlap_sections
+                )
+                correction_total += len(windows) + 1  # n review rounds + 1 synthesis
+            else:
+                correction_total += p.max_rounds
         correction_pbar = tqdm(
             total=correction_total, desc="Review & correction", unit="round", leave=True
         )
@@ -191,6 +199,12 @@ class HandcraftedGraph:
 
         if phase.section_aware:
             await self._execute_section_aware_phase(
+                input, phase, scheduler, max_tries, max_time, overall_pbar
+            )
+            return
+
+        if phase.window_aware:
+            await self._execute_window_aware_phase(
                 input, phase, scheduler, max_tries, max_time, overall_pbar
             )
             return
@@ -373,6 +387,145 @@ class HandcraftedGraph:
             if overall_pbar is not None:
                 overall_pbar.update(1)
 
+    # ------------------------------------------------------------------
+    # Window-aware phase execution (VALIDATION)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_section_windows(
+        sections: List[dict],
+        window_size: int = 6000,
+        overlap_sections: int = 1,
+    ) -> List[List[dict]]:
+        """Group sections into overlapping windows that fit within window_size chars.
+
+        Each window contains complete sections (no mid-section cuts), preserving
+        semantic boundaries. Consecutive windows share overlap_sections sections
+        so cross-boundary transitions are always visible in at least one window.
+        """
+        if not sections:
+            return []
+        windows: List[List[dict]] = []
+        i = 0
+        while i < len(sections):
+            window: List[dict] = []
+            total = 0
+            j = i
+            while j < len(sections):
+                section_len = len(sections[j]["content"])
+                if total + section_len > window_size and window:
+                    break  # window full — stop before this section
+                window.append(sections[j])
+                total += section_len
+                j += 1
+            windows.append(window)
+            i += max(1, len(window) - overlap_sections)
+        return windows
+
+    async def _execute_window_aware_phase(
+        self,
+        input: Dict[str, str],
+        phase: PhaseConfig,
+        scheduler: RoundScheduler,
+        max_tries: int,
+        max_time: int,
+        overall_pbar: Optional[tqdm] = None,
+    ) -> None:
+        """Execute a window-aware phase by sliding over ReportState.sections.
+
+        For each window (a group of complete sections ≤ window_size chars):
+          - Reviewer audits the window content and notes cross-section issues.
+          - Notes are accumulated in ReportState.validation_notes.
+
+        After all windows a single synthesis round runs: Reviewer + LeadArchitect
+        receive the accumulated notes and produce a consolidated quality report.
+        ReportState.validation_window is set to None to signal synthesis mode.
+
+        Memory is cleared between windows to prevent cross-window contamination.
+        """
+        report_state = ReportState.instance()
+        sections = report_state.sections
+        windows = self._build_section_windows(
+            sections, phase.window_size, phase.window_overlap_sections
+        )
+        n_windows = len(windows)
+
+        if n_windows == 0:
+            logger.warning(f"Phase '{phase.name.value}': no sections to validate — skipping.")
+            return
+
+        review_topology    = phase.round_topologies[0]
+        synthesis_topology = phase.round_topologies[1]
+
+        # ── Window review rounds ──────────────────────────────────────────
+        for i, window_sections in enumerate(windows):
+            report_state.validation_window = (i, n_windows, window_sections)
+            self._clear_all_memory()
+
+            if overall_pbar is not None:
+                overall_pbar.set_description(
+                    f"[{phase.name.value.upper()}] window {i + 1}/{n_windows}"
+                )
+
+            active_agents = await scheduler.get_active_agents(
+                review_topology, i, task_input=input
+            )
+            logger.info(
+                f"  [{phase.name.value}] Window {i + 1}/{n_windows}: "
+                f"sections={[s['id'] for s in window_sections]} "
+                f"active={sorted(active_agents)}"
+            )
+
+            self._build_topology(review_topology, active_agents)
+            self._connect_temporal()
+
+            if self.execution_trace is not None:
+                self._init_trace_round()
+                self._trace_spatial_edges()
+
+            await self._execute_round(input, active_agents, max_tries, max_time)
+            self._update_memory()
+            self._clear_spatial()
+            self.phase_state.increment_round()
+
+            reviewer_node = self._get_node_by_name("Reviewer")
+            if reviewer_node and reviewer_node.outputs:
+                note = str(reviewer_node.outputs[-1] or "").strip()
+                if note:
+                    report_state.validation_notes.append(note)
+
+            if overall_pbar is not None:
+                overall_pbar.update(1)
+
+        # ── Synthesis round ───────────────────────────────────────────────
+        report_state.validation_window = None  # signals synthesis mode to agents
+        self._clear_all_memory()
+
+        if overall_pbar is not None:
+            overall_pbar.set_description(f"[{phase.name.value.upper()}] synthesis")
+
+        active_agents = await scheduler.get_active_agents(
+            synthesis_topology, n_windows, task_input=input
+        )
+        logger.info(
+            f"  [{phase.name.value}] Synthesis: active={sorted(active_agents)}"
+        )
+
+        self._build_topology(synthesis_topology, active_agents)
+        self._connect_temporal()
+
+        if self.execution_trace is not None:
+            self._init_trace_round()
+            self._trace_spatial_edges()
+
+        await self._execute_round(input, active_agents, max_tries, max_time)
+        self._update_memory()
+        self._clear_spatial()
+        self.phase_state.increment_round()
+
+        if overall_pbar is not None:
+            overall_pbar.update(1)
+
     async def _execute_round(
         self,
         input: Dict[str, str],
@@ -511,15 +664,21 @@ class HandcraftedGraph:
             node.temporal_successors = []
 
     def _clear_all_memory(self) -> None:
-        """Wipe last_memory for every node at a phase boundary.
+        """Wipe all per-node state at a phase or section boundary.
 
-        Prevents stale temporal outputs from a finished phase from
-        pattern-biasing agent behaviour in the next one. All durable
-        cross-phase state (section list, current directive, progress)
-        is carried by ReportState, not by temporal memory.
+        Clears both last_memory AND the live output/input buffers. Clearing
+        only last_memory is insufficient: _update_memory() copies node.outputs
+        into last_memory after every round, so a node that did not execute in
+        the current round would carry stale outputs from a previous phase or
+        section into last_memory — making TEMPORAL_HEURISTIC falsely include it
+        in subsequent rounds. Zeroing node.outputs/inputs/raw_inputs here
+        ensures that non-executing nodes produce empty last_memory entries.
         """
         for node in self.nodes.values():
             node.last_memory = {"inputs": [], "outputs": [], "raw_inputs": []}
+            node.outputs = []
+            node.inputs = []
+            node.raw_inputs = []
 
     def _update_memory(self) -> None:
         for node in self.nodes.values():

@@ -24,10 +24,21 @@ class Reviewer(Node):
         except Exception:
             return False
 
+    def _is_validation_phase(self) -> bool:
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            return PhaseState.instance().current_phase == PhaseType.VALIDATION
+        except Exception:
+            return False
+
     def _get_review_content(self) -> tuple:
         """Return (report_label, report_content) appropriate for the current phase.
 
         SECTION_REVIEW: single section text — no truncation needed.
+        VALIDATION window review: the sections in the current window (complete text).
+        VALIDATION synthesis: a compact section-list overview — full content not needed
+            since findings are passed through get_context_block validation_notes.
         All other phases: full report with head+tail cap for context safety.
         """
         if self._is_section_review_phase():
@@ -39,7 +50,21 @@ class Reviewer(Node):
                 return "Section Content", header + section["content"]
             return "Section Content", "[No section content available]"
 
-        # Full-report path: head + tail truncation
+        if self._is_validation_phase():
+            window_info = self.report.validation_window
+            if window_info is not None:
+                # Window review — show only the sections in this window
+                i, n_windows, window_sections = window_info
+                content = "\n\n".join(
+                    f"### {s['title'] or s['id']}\n{s['content']}"
+                    for s in window_sections
+                )
+                return f"Report Window {i + 1} of {n_windows}", content
+            else:
+                # Synthesis round — full content already reviewed; show structure only
+                return "Report Structure", self.report.list_sections(verbose=True)
+
+        # Fallback: head + tail truncation for any legacy path
         _MAX_CHARS = 6000
         _HALF = _MAX_CHARS // 2
         full = self.report.content or self.report.progress

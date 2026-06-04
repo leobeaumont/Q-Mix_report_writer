@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import urllib.request
 import chromadb
@@ -199,8 +200,27 @@ class RAGManager:
         if self._reranker is None:
             import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
-            self._reranker_tokenizer = AutoTokenizer.from_pretrained(self._reranker_model_name)
-            self._reranker = AutoModelForSequenceClassification.from_pretrained(self._reranker_model_name)
+            # Suppress model-load noise at the file-descriptor level.
+            # contextlib.redirect_* only patches sys.stdout/stderr (Python objects);
+            # the safetensors Rust extension and huggingface_hub write directly to
+            # fd 1 / fd 2, bypassing Python's I/O layer entirely.
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
+            _devnull = os.open(os.devnull, os.O_WRONLY)
+            _saved_out = os.dup(1)
+            _saved_err = os.dup(2)
+            try:
+                os.dup2(_devnull, 1)
+                os.dup2(_devnull, 2)
+                self._reranker_tokenizer = AutoTokenizer.from_pretrained(self._reranker_model_name)
+                self._reranker = AutoModelForSequenceClassification.from_pretrained(self._reranker_model_name)
+            finally:
+                os.dup2(_saved_out, 1)
+                os.dup2(_saved_err, 2)
+                os.close(_saved_out)
+                os.close(_saved_err)
+                os.close(_devnull)
             self._reranker.eval()
         import torch
         pairs = [[query, c["content"]] for c in candidates]

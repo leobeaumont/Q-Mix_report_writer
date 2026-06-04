@@ -56,9 +56,12 @@ PHASE_CONTEXT: dict[PhaseType, str] = {
     ),
     PhaseType.VALIDATION: (
         "### Pipeline Phase: VALIDATION\n"
-        "The team is performing a final global quality check on the complete report. "
-        "Focus exclusively on cross-section issues: flow, transitions between sections, "
-        "duplicated content, and global coherence. Do not rewrite content directly."
+        "The team is performing a final global quality check using a sliding window. "
+        "Each pass covers a subset of adjacent sections — you are NEVER seeing the full report at once. "
+        "Focus on cross-section issues visible within the shown window only: "
+        "transitions, duplicated content, flow continuity. "
+        "Do NOT flag sections as missing or incomplete — other sections exist outside your current window. "
+        "Do not rewrite content directly."
     ),
 }
 
@@ -208,20 +211,22 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "CRITICAL: Do NOT write about the retrieval process, the RAG system, the absence "
         "of data, or any pipeline-internal details."
     ),
-    # VALIDATION
+    # VALIDATION — window review round
     (PhaseType.VALIDATION, "Reviewer"): (
-        "Read the full report and identify ONLY cross-section quality issues: "
-        "abrupt transitions, duplicated content between sections, broken narrative flow, "
-        "or contradictions between sections. "
+        "Review ONLY the sections shown in your current window. "
+        "Identify cross-section issues visible within this window: abrupt transitions between "
+        "adjacent sections, duplicated content, or broken narrative flow. "
+        "Do NOT flag sections as missing — the report extends beyond this window. "
         "Do NOT repeat section-level factual checks — those were already done. "
-        "For each issue, state the affected sections and the specific problem. "
-        "If the report reads well globally, state so briefly."
+        "For each issue, name the adjacent sections involved and describe the specific problem. "
+        "If the window transitions read well, state so in one sentence.\n\n"
+        "In the synthesis round you will find all accumulated window notes in the context above. "
+        "Synthesise the most important cross-section issues into a concise global quality report."
     ),
     (PhaseType.VALIDATION, "Lead Architect"): (
-        "Receive the Reviewer's global quality notes and write a brief validation "
-        "conclusion (2-4 sentences). Summarise the overall quality of the report "
-        "and list any critical remaining concerns. This is a diagnostic output only — "
-        "do not trigger further rewrites."
+        "Receive the Reviewer's synthesised global quality notes and write a brief validation "
+        "conclusion (2-4 sentences). Summarise the overall report quality and list any critical "
+        "remaining concerns. This is a diagnostic output only — do not trigger further rewrites."
     ),
 }
 
@@ -275,8 +280,27 @@ class HandcraftedPromptSet(PromptSet):
 
         if phase == PhaseType.VALIDATION:
             from utils.globals import ReportState
-            block += f"\n**Report sections:**\n"
-            block += ReportState.instance().list_sections(verbose=True) + "\n"
+            report_state = ReportState.instance()
+            window_info = report_state.validation_window
+            if window_info is not None:
+                # Window review: show scope so agents don't flag out-of-window content
+                i, n_windows, window_sections = window_info
+                ids = ", ".join(s["id"] for s in window_sections)
+                block += (
+                    f"\n**Validation window {i + 1} of {n_windows}** — "
+                    f"reviewing: {ids}. "
+                    f"All other sections are outside this window — do not reference them.\n"
+                )
+            else:
+                # Synthesis: provide section list + all accumulated window notes
+                block += f"\n**Full report structure:**\n"
+                block += report_state.list_sections(verbose=True) + "\n"
+                notes = report_state.validation_notes
+                if notes:
+                    block += f"\n**Window review notes ({len(notes)} window(s) reviewed):**\n"
+                    for j, note in enumerate(notes):
+                        excerpt = note[:800] + ("…" if len(note) > 800 else "")
+                        block += f"\n--- Window {j + 1} ---\n{excerpt}\n"
 
         return block
 
