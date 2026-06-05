@@ -56,12 +56,16 @@ PHASE_CONTEXT: dict[PhaseType, str] = {
     ),
     PhaseType.VALIDATION: (
         "### Pipeline Phase: VALIDATION\n"
-        "The team is performing a final global quality check using a sliding window. "
-        "Each pass covers a subset of adjacent sections — you are NEVER seeing the full report at once. "
-        "Focus on cross-section issues visible within the shown window only: "
-        "transitions, duplicated content, flow continuity. "
-        "Do NOT flag sections as missing or incomplete — other sections exist outside your current window. "
-        "Do not rewrite content directly."
+        "The team is performing a final cross-section consistency check using a sliding window. "
+        "Each pass covers a subset of adjacent sections. "
+        "Flag ONLY serious structural problems: factual contradictions between sections, "
+        "significant verbatim or near-verbatim content duplication, or transitions so abrupt "
+        "that comprehension is genuinely impaired. "
+        "Do NOT flag the mere absence of a bridging sentence or minor stylistic roughness — "
+        "imperfect phrasing between sections is not a failure. "
+        "Do NOT attempt per-section fact-checking against sources — no source chunks are "
+        "available here; that was done in SECTION_REVIEW. "
+        "Do NOT flag sections as missing or incomplete."
     ),
 }
 
@@ -73,8 +77,12 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "ONLY plan sections for topics the Researcher explicitly confirmed are present "
         "in the knowledge base — do not invent sections around topics not mentioned. "
         "Each section entry must have a title and a one-sentence scope statement. "
-        "IMPORTANT: Round 1 of PLANNING only — output the complete numbered section list "
-        "as your entire output; this overrides the 'never list tasks' constraint. "
+        "CRITICAL: If the Researcher returned `[RESEARCH_EXHAUSTED]` or provided no "
+        "confirmed topics, you have NO evidence — do NOT produce a section list. "
+        "Output only: `[AWAITING_COVERAGE_DATA]` and nothing else. "
+        "IMPORTANT: Round 1 of PLANNING only (and only if the Researcher provided coverage) "
+        "— output the complete numbered section list as your entire output; "
+        "this overrides the 'never list tasks' constraint. "
         "Round 2+ of PLANNING — the outline is already stored; do NOT rebuild it. "
         "In every PLANNING round, end by naming the first section target in one sentence."
     ),
@@ -189,6 +197,8 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "  - FLAG contradictions: if a claim directly contradicts information in a provided chunk, report it.\n"
         "  - FLAG hallucinated specifics: if a highly specific data point (exact number, formula, proper name) "
         "appears nowhere in your entire context, flag it as potentially hallucinated.\n"
+        "BE CONCISE: report only actionable issues — do not narrate the verification process or list "
+        "confirmed claims. A short response is better than an exhaustive one.\n"
         "DECISION RULE — choose exactly one branch and follow it literally:\n"
         "  • If ZERO issues found → write the single token `[NO_REVISION_NEEDED]` and stop. Nothing else.\n"
         "  • If ANY issue found → list each issue as (1)/(2)/… with its correction and stop. "
@@ -223,19 +233,33 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
     # VALIDATION — window review round
     (PhaseType.VALIDATION, "Reviewer"): (
         "Review ONLY the sections shown in your current window. "
-        "Identify cross-section issues visible within this window: abrupt transitions between "
-        "adjacent sections, duplicated content, or broken narrative flow. "
-        "Do NOT flag sections as missing — the report extends beyond this window. "
-        "Do NOT repeat section-level factual checks — those were already done. "
-        "For each issue, name the adjacent sections involved and describe the specific problem. "
-        "If the window transitions read well, state so in one sentence.\n\n"
-        "In the synthesis round you will find all accumulated window notes in the context above. "
-        "Synthesise the most important cross-section issues into a concise global quality report."
+        "Apply a HIGH threshold — only report an issue if it is a serious problem:\n"
+        "  • Factual contradiction: the same entity, measurement, or claim is stated with "
+        "conflicting values in adjacent sections.\n"
+        "  • Significant duplication: the same factual content, key equations, or core "
+        "argument appears in two adjacent sections with only minor rephrasing, adding nothing new.\n"
+        "  • Severe transition: two adjacent sections discuss completely unrelated topics "
+        "with no logical connection — not merely a missing bridging sentence.\n"
+        "Do NOT flag: absent bridging sentences, imperfect phrasing, stylistic roughness, "
+        "or any issue that does not impede understanding. "
+        "Do NOT attempt per-section fact-checking — no source chunks are available here. "
+        "Do NOT flag sections as missing. "
+        "If no serious issues are found, state so in one sentence.\n\n"
+        "In the synthesis round, consolidate all window notes into a concise global report "
+        "covering only the serious issues identified above."
     ),
     (PhaseType.VALIDATION, "Lead Architect"): (
         "Receive the Reviewer's synthesised global quality notes and write a brief validation "
-        "conclusion (2-4 sentences). Summarise the overall report quality and list any critical "
-        "remaining concerns. This is a diagnostic output only — do not trigger further rewrites."
+        "conclusion (2-4 sentences). Summarise the overall report quality.\n"
+        "Apply a HIGH threshold for failure — output `[VALIDATION_FAILED]` ONLY if the "
+        "Reviewer identified at least one serious problem: a factual contradiction between "
+        "sections, significant near-verbatim content duplication, or a transition so "
+        "incomprehensible that it genuinely impairs understanding. "
+        "Imperfect phrasing, absent bridging sentences, and minor stylistic issues are NOT "
+        "failure criteria.\n"
+        "End your response with EXACTLY one of these two tokens on its own line:\n"
+        "  `[VALIDATION_PASSED]` — no serious cross-section issues remain.\n"
+        "  `[VALIDATION_FAILED]` — at least one serious issue requires correction."
     ),
 }
 
@@ -285,6 +309,14 @@ class HandcraftedPromptSet(PromptSet):
                     f"\n**Current section under review:**\n"
                     f"  ID: `{section['id']}` | Title: {section['title'] or '(untitled)'} "
                     f"| Section {idx + 1} of {len(sections)}\n"
+                )
+            # Inject per-section actions from a previous failed validation pass.
+            directive = report_state.validation_directive
+            if directive:
+                block += (
+                    f"\n**Validation directive (from previous failed validation — "
+                    f"apply EXACTLY as stated; do not introduce different values):**\n"
+                    f"{directive}\n"
                 )
 
         if phase == PhaseType.VALIDATION:

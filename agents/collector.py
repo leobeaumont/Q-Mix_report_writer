@@ -14,7 +14,7 @@ _ABSENCE_RE = re.compile(
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
-from utils.globals import ReportState, SourceBuffer
+from utils.globals import ReportState, SourceBuffer, strip_citation_tags
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -41,7 +41,9 @@ class Collector(Node):
             idx = self.report.review_section_idx
             sections = self.report.sections
             if 0 <= idx < len(sections):
-                return "Current Section", sections[idx]["content"]
+                # Strip citation tags so the Collector rewrites clean prose;
+                # _apply_citation_tags() will re-tag the revised content afterwards.
+                return "Current Section", strip_citation_tags(sections[idx]["content"])
             return "Current Section", "[No section content available]"
         return "Previous Text Production", self.report.get_last()
 

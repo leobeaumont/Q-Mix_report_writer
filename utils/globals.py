@@ -1,5 +1,12 @@
 from typing import List, Optional, Dict
 import json
+import re
+
+_CITE_TAG_RE = re.compile(r'\s*\[cite:\d+[^\]]*\]')
+
+def strip_citation_tags(text: str) -> str:
+    """Remove all [cite:...] tags from text, collapsing any extra whitespace left behind."""
+    return _CITE_TAG_RE.sub('', text)
 
 class Singleton:
     _instance = None
@@ -54,6 +61,8 @@ class ReportState(Singleton):
         # Bibliography (built once before SECTION_REVIEW, never modified after)
         self.bibliography: str = ""
         self.bibliography_map: Dict[str, int] = {}      # source filename → bib number
+        # Validation loop state
+        self.validation_directive: str = ""             # per-section actions from failed validation
 
     def reset(self):
         self.content = ""
@@ -68,6 +77,7 @@ class ReportState(Singleton):
         self.validation_notes = []
         self.bibliography = ""
         self.bibliography_map = {}
+        self.validation_directive = ""
 
     def add_deficiency(self, topic: str) -> None:
         """Record a topic the Researcher confirmed is absent from the knowledge base."""

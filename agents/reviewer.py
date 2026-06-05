@@ -1,7 +1,7 @@
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from utils.config import get_llm
-from utils.globals import ReportState
+from utils.globals import ReportState, strip_citation_tags
 from prompt.prompt_set_registry import PromptSetRegistry
 
 
@@ -69,8 +69,11 @@ class Reviewer(Node):
             if 0 <= idx < len(sections):
                 section = sections[idx]
                 header = f"Section ID: {section['id']} | Title: {section['title'] or '(untitled)'}\n\n"
+                # Strip citation tags so the Reviewer audits clean prose and cannot
+                # hallucinate or misinterpret existing tags.
+                clean_content = strip_citation_tags(section["content"])
                 source_block = self._build_source_docs_block(section.get("sources", []))
-                return "Section Content", header + section["content"] + source_block
+                return "Section Content", header + clean_content + source_block
             return "Section Content", "[No section content available]"
 
         if self._is_validation_phase():

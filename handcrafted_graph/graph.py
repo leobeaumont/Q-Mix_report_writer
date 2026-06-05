@@ -131,6 +131,7 @@ class HandcraftedGraph:
         input: Dict[str, str],
         max_tries: int = 3,
         max_time: int = 300,
+        max_validation_attempts: int = 2,
     ) -> Tuple[List[Any], int]:
         """Run the full phase pipeline and return the finished report.
 
@@ -184,35 +185,128 @@ class HandcraftedGraph:
             f"  Starting review & correction phase…\n"
         )
 
-        # ── Bibliography (built once, before any review touches the report) ──
-        self._build_bibliography()
-
-        # ── Bar 2: Correction (SECTION_REVIEW → VALIDATION) ──────────────
-        # Total is now exact: we know n_sections (and can build windows) upfront.
-        sections = ReportState.instance().sections
-        correction_total = 0
-        for p in correction_phases:
-            if p.section_aware:
-                correction_total += p.max_rounds * n_sections
-            elif p.window_aware:
-                windows = self._build_section_windows(
-                    sections, p.window_size, p.window_overlap_sections
-                )
-                correction_total += len(windows) + 1  # n review rounds + 1 synthesis
-            else:
-                correction_total += p.max_rounds
-        correction_pbar = tqdm(
-            total=correction_total, desc="Review & correction", unit="round", leave=True
-        )
-        try:
-            for phase in correction_phases:
-                self.phase_state.set_phase(phase.name)
-                logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
-                await self._execute_phase(input, phase, max_tries, max_time, correction_pbar)
-        finally:
-            correction_pbar.close()
-
+        # ── Bibliography — built once; guard prevents rebuild on validation retries ──
         report_state = ReportState.instance()
+        if not report_state.bibliography_map:
+            self._build_bibliography()
+
+        # Split correction phases so the validation loop can restart only SECTION_REVIEW.
+        section_review_phases = [p for p in correction_phases if p.section_aware]
+        validation_phases     = [p for p in correction_phases if p.name == PhaseType.VALIDATION]
+
+        # ── Validation loop ────────────────────────────────────────────────
+        for attempt in range(max_validation_attempts + 1):
+            sections   = report_state.sections
+            n_sections = len(sections)
+
+            # Reset per-pass validation state so each pass is a fresh assessment.
+            report_state.validation_notes  = []
+            report_state.validation_window = None
+
+            # Trace: insert a pass-boundary marker before every re-review so the
+            # visualizer can distinguish first-pass rounds from retry rounds.
+            if self.execution_trace is not None and attempt > 0:
+                self.execution_trace.trace.append({
+                    "exec_order": ["__validation_retry__"],
+                    "validation_pass": attempt + 1,
+                    "validation_directive": report_state.validation_directive,
+                })
+
+            # Build progress bar for this pass.
+            sr_total = sum(p.max_rounds * n_sections for p in section_review_phases)
+            val_total = 0
+            for p in validation_phases:
+                if p.window_aware:
+                    windows = self._build_section_windows(
+                        sections, p.window_size, p.window_overlap_sections
+                    )
+                    val_total += len(windows) + 1
+                else:
+                    val_total += p.max_rounds
+
+            pass_label = (
+                "Review & correction"
+                if attempt == 0
+                else f"Re-review (pass {attempt + 1}/{max_validation_attempts + 1})"
+            )
+            correction_pbar = tqdm(
+                total=sr_total + val_total, desc=pass_label, unit="round", leave=True
+            )
+            try:
+                for phase in section_review_phases:
+                    self.phase_state.set_phase(phase.name)
+                    logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
+                    await self._execute_phase(input, phase, max_tries, max_time, correction_pbar)
+
+                for phase in validation_phases:
+                    self.phase_state.set_phase(phase.name)
+                    logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
+                    await self._execute_phase(input, phase, max_tries, max_time, correction_pbar)
+            finally:
+                correction_pbar.close()
+
+            # ── Check validation outcome ───────────────────────────────────
+            la_node = self._get_node_by_name("LeadArchitect")
+            la_output = (
+                str(la_node.outputs[-1] or "")
+                if la_node and la_node.outputs else ""
+            )
+
+            # Trace: stamp the outcome onto the last round so the visualizer can
+            # colour-code pass vs fail without parsing the LeadArchitect response.
+            if self.execution_trace is not None:
+                outcome = (
+                    "PASSED" if "[VALIDATION_PASSED]" in la_output
+                    else "MAX_ATTEMPTS" if attempt >= max_validation_attempts
+                    else "FAILED"
+                )
+                self.execution_trace.trace[-1]["validation_outcome"] = outcome
+                self.execution_trace.trace[-1]["validation_attempt"] = attempt + 1
+
+            if "[VALIDATION_PASSED]" in la_output:
+                logger.info(f"[{self.id}] Validation passed on attempt {attempt + 1}.")
+                tqdm.write(f"\n  Validation passed — report finalised.\n")
+                break
+
+            if attempt >= max_validation_attempts:
+                tqdm.write(
+                    f"\n  Max validation attempts ({max_validation_attempts + 1}) reached"
+                    f" — finalising report as-is.\n"
+                )
+                break
+
+            # ── Validation failed — decompose and prepare next pass ────────
+            rv_node = self._get_node_by_name("Reviewer")
+            reviewer_synthesis = (
+                str(rv_node.outputs[-1] or "")
+                if rv_node and rv_node.outputs else ""
+            )
+            combined_issues = f"{reviewer_synthesis}\n\n{la_output}".strip()
+
+            tqdm.write(
+                f"\n  Validation failed (attempt {attempt + 1}/{max_validation_attempts + 1})."
+                f"  Decomposing issues and scheduling re-review…\n"
+            )
+
+            directive = await self._decompose_validation_directive(combined_issues, report_state)
+            report_state.validation_directive = directive
+            tqdm.write(f"  Revision directive:\n{directive}\n")
+
+            # Trace: dedicated entry for the decomposition call so the visualizer
+            # can show the directive and the issues that triggered it.
+            if self.execution_trace is not None:
+                self.execution_trace.trace.append({
+                    "exec_order": ["__decomposition__"],
+                    "decomposition": {
+                        "attempt": attempt + 1,
+                        "issues_summary": combined_issues[:600],
+                        "directive": directive,
+                    },
+                })
+
+            self._clear_all_memory()
+
+        # ── Assemble final report ──────────────────────────────────────────
         report = report_state.content
         if report_state.bibliography:
             report = report.rstrip() + "\n\n" + report_state.bibliography
@@ -478,6 +572,10 @@ class HandcraftedGraph:
         Each window contains complete sections (no mid-section cuts), preserving
         semantic boundaries. Consecutive windows share overlap_sections sections
         so cross-boundary transitions are always visible in at least one window.
+
+        A minimum of 2 sections per window is enforced (unless fewer than 2 sections
+        remain) so that adjacent sections always appear together and the Reviewer can
+        detect cross-section duplication even when individual sections are large.
         """
         if not sections:
             return []
@@ -489,8 +587,10 @@ class HandcraftedGraph:
             j = i
             while j < len(sections):
                 section_len = len(sections[j]["content"])
-                if total + section_len > window_size and window:
-                    break  # window full — stop before this section
+                # Enforce window_size limit only once we have ≥ 2 sections, so that
+                # a single oversized section never fills the window alone.
+                if total + section_len > window_size and len(window) >= 2:
+                    break
                 window.append(sections[j])
                 total += section_len
                 j += 1
@@ -808,6 +908,57 @@ class HandcraftedGraph:
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Validation directive decomposition
+    # ------------------------------------------------------------------
+
+    async def _decompose_validation_directive(
+        self,
+        combined_issues: str,
+        report_state,
+    ) -> str:
+        """Ask the LLM to decompose global validation issues into per-section actions.
+
+        Returns a bulleted list of `- section_N: <action>` items, or the raw
+        combined_issues string if the LLM call fails.
+        """
+        llm = self._get_any_llm()
+        if llm is None:
+            return combined_issues
+
+        system = (
+            "You are a report quality coordinator. A validation review found cross-section "
+            "issues in a multi-section scientific report. Decompose each issue into concrete, "
+            "unambiguous revision instructions.\n\n"
+            "CRITICAL RULES:\n"
+            "1. For factual contradictions where the SAME value is stated differently in "
+            "multiple sections: pick ONE authoritative value (prefer the one cited with a "
+            "specific source page) and list EVERY section that must be updated to use it. "
+            "Never say 'reconcile' or 'align' — always give the exact value to use.\n"
+            "2. For content duplication: name the section to keep and the section to shorten.\n"
+            "3. For severe transitions: name which section's opening or closing sentence to revise."
+        )
+        section_list = report_state.list_sections(verbose=True)
+        user = (
+            f"### Report sections\n{section_list}\n\n"
+            f"### Identified issues\n{combined_issues}\n\n"
+            "Output ONLY a bulleted list using this exact format:\n"
+            "  - <section_id>: <specific action with exact value if applicable>\n\n"
+            "One bullet per section that needs changing. If the same value must be used in "
+            "multiple sections, list each section separately with the same explicit value. "
+            "Use exact section IDs from the list above. Skip praise or general observations."
+        )
+        message = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        try:
+            response = await llm.agen(message, calling_agent="LeadArchitect")
+            return response.strip() if response else combined_issues
+        except Exception as exc:
+            logger.warning(f"[{self.id}] Directive decomposition failed: {exc}")
+            return combined_issues
 
     # ------------------------------------------------------------------
     # Bibliography
