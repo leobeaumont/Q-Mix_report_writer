@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -31,6 +32,32 @@ from handcrafted_graph.state import PhaseState
 from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace, SourceBuffer
 
 logger = logging.getLogger("handcrafted_graph")
+
+# ------------------------------------------------------------------
+# Citation tagging — sentence-level n-gram overlap constants
+# ------------------------------------------------------------------
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])(\s+)(?=[A-Z"\'])')
+_TOKEN_RE          = re.compile(r'[a-zA-Z0-9]+')
+_MIN_TOKEN_LEN        = 3   # minimum token length to be considered meaningful
+_MIN_CITATION_OVERLAP = 3   # shared tokens required to assign a citation
+_MIN_SENTENCE_TOKENS  = 3   # sentence must have this many tokens to be a candidate
+
+_STOPWORDS = frozenset({
+    # 2–3 letter function words
+    "the", "and", "for", "are", "was", "its", "his", "her", "our", "has",
+    "had", "not", "but", "all", "can", "may", "one", "two", "any", "few",
+    "new", "via", "per", "non", "sub", "pre", "pro", "out", "off", "set",
+    "let", "yet", "nor", "use", "due", "far", "low", "top", "end", "key",
+    # 4+ letter common words
+    "that", "this", "with", "from", "have", "been", "which", "they", "their",
+    "also", "both", "such", "more", "when", "where", "than", "then", "into",
+    "onto", "upon", "these", "those", "there", "here", "what", "some", "each",
+    "over", "after", "under", "about", "through", "between", "along", "while",
+    "since", "using", "within", "without", "toward", "above", "below",
+    "during", "given", "often", "many", "most", "other", "only", "very",
+    "show", "shows", "shown", "note", "noted", "term", "terms", "well",
+    "thus", "hence", "which", "where", "when", "how", "now", "then",
+})
 
 
 class HandcraftedGraph:
@@ -157,6 +184,9 @@ class HandcraftedGraph:
             f"  Starting review & correction phase…\n"
         )
 
+        # ── Bibliography (built once, before any review touches the report) ──
+        self._build_bibliography()
+
         # ── Bar 2: Correction (SECTION_REVIEW → VALIDATION) ──────────────
         # Total is now exact: we know n_sections (and can build windows) upfront.
         sections = ReportState.instance().sections
@@ -182,7 +212,14 @@ class HandcraftedGraph:
         finally:
             correction_pbar.close()
 
-        report = ReportState.instance().content
+        report_state = ReportState.instance()
+        report = report_state.content
+        if report_state.bibliography:
+            report = report.rstrip() + "\n\n" + report_state.bibliography
+
+        if self.execution_trace is not None:
+            self.execution_trace.trace[-1]["Collector"]["report_state"] = report
+
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
         total_tokens = int(tokens_after - tokens_before)
 
@@ -368,6 +405,11 @@ class HandcraftedGraph:
                 )
                 if overall_pbar is not None:
                     overall_pbar.update(1)  # account for skipped revision round
+                self._apply_citation_tags(i)
+                if self.execution_trace is not None:
+                    self.execution_trace.trace[-1]["Collector"]["report_state"] = (
+                        ReportState.instance().content
+                    )
                 continue
 
             # ---- Round B: revision --------------------------------------
@@ -398,6 +440,12 @@ class HandcraftedGraph:
 
             if overall_pbar is not None:
                 overall_pbar.update(1)
+
+            self._apply_citation_tags(i)
+            if self.execution_trace is not None:
+                self.execution_trace.trace[-1]["Collector"]["report_state"] = (
+                    ReportState.instance().content
+                )
 
     # ------------------------------------------------------------------
     # Window-aware phase execution (VALIDATION)
@@ -744,6 +792,209 @@ class HandcraftedGraph:
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Bibliography
+    # ------------------------------------------------------------------
+
+    # Matches new arXiv format (e.g. 2605.30554) and old format (e.g. 0208016 / 9804027).
+    _ARXIV_NEW_RE = re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?\.pdf$", re.IGNORECASE)
+    _ARXIV_OLD_RE = re.compile(r"^(\d{7})(v\d+)?\.pdf$", re.IGNORECASE)
+
+    def _build_bibliography(self) -> None:
+        """Build a deduplicated markdown bibliography from all collected sources.
+
+        Deduplicates by source filename, preserving first-encounter order
+        (PLANNING → RESEARCH → DRAFTING sections).  Populates:
+          - ReportState.bibliography      : the markdown text
+          - ReportState.bibliography_map  : {source_filename: bib_number}
+
+        No LLM calls — pure metadata extraction from already-collected sources.
+        """
+        report_state = ReportState.instance()
+        all_sources = report_state.sources
+
+        if not all_sources:
+            logger.warning(f"[{self.id}] Bibliography: no sources collected — skipping.")
+            return
+
+        # Deduplicate by source filename, keep first-seen doc dict for metadata.
+        seen: Dict[str, dict] = {}
+        for doc in all_sources:
+            src = doc.get("source", "").strip()
+            if src and src not in seen:
+                seen[src] = doc
+
+        # Build mapping and markdown in one pass.
+        bib_map: Dict[str, int] = {}
+        lines = ["## Bibliography\n"]
+
+        for num, (source_name, doc) in enumerate(seen.items(), start=1):
+            bib_map[source_name] = num
+            lines.append(self._format_bib_entry(num, source_name))
+
+        report_state.bibliography_map = bib_map
+        report_state.bibliography = "\n".join(lines)
+        logger.info(
+            f"[{self.id}] Bibliography built: {len(seen)} unique source(s)."
+        )
+
+    @classmethod
+    def _format_bib_entry(cls, num: int, source_name: str) -> str:
+        """Return one markdown bibliography line for the given source filename."""
+        # Try new arXiv format first (e.g. 2605.30554.pdf)
+        m = cls._ARXIV_NEW_RE.match(source_name)
+        if m:
+            arxiv_id = m.group(1)
+            return f"[{num}] **{source_name}** *(arXiv:{arxiv_id})*"
+
+        # Try old arXiv format (e.g. 0208016.pdf — 7-digit hep-*/astro-ph IDs)
+        m = cls._ARXIV_OLD_RE.match(source_name)
+        if m:
+            arxiv_id = m.group(1)
+            return f"[{num}] **{source_name}** *(arXiv:{arxiv_id})*"
+
+        # Generic fallback: just the filename, file type noted
+        ext = source_name.rsplit(".", 1)[-1].upper() if "." in source_name else ""
+        type_tag = f" *({ext})*" if ext else ""
+        return f"[{num}] **{source_name}**{type_tag}"
+
+    # ------------------------------------------------------------------
+    # Citation tagging
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tokenize(text: str) -> frozenset:
+        """Return a frozenset of meaningful tokens from text.
+
+        Keeps alphanumeric tokens of length >= _MIN_TOKEN_LEN that are not in
+        _STOPWORDS.  Numbers are kept at length >= 3 so that values like "154"
+        or "360" contribute to overlap scoring alongside longer word tokens.
+        """
+        result = set()
+        for t in _TOKEN_RE.findall(text.lower()):
+            if t in _STOPWORDS:
+                continue
+            # Numbers: keep at >= 3 chars; words: keep at >= _MIN_TOKEN_LEN
+            if t.isdigit():
+                if len(t) >= 3:
+                    result.add(t)
+            elif len(t) >= _MIN_TOKEN_LEN:
+                result.add(t)
+        return frozenset(result)
+
+    def _apply_citation_tags(self, section_idx: int) -> None:
+        """Insert citation tags into a section using sentence-level n-gram overlap.
+
+        For each non-heading line in the section, sentences are split on
+        punctuation boundaries.  Each sentence is scored against the RAG chunks
+        that were retrieved when the section was drafted.  When the shared
+        meaningful-token count meets _MIN_CITATION_OVERLAP, a [cite:N, p.X] tag
+        is appended after the sentence (or [cite:N] if no page info is stored).
+
+        The updated content is written back via replace_section() so that the
+        sources list for the section is preserved unchanged.
+        """
+        report_state = ReportState.instance()
+        sections = report_state.sections
+        if not (0 <= section_idx < len(sections)):
+            return
+
+        section = sections[section_idx]
+        sources = section.get("sources", [])
+        bib_map = report_state.bibliography_map
+
+        if not sources or not bib_map:
+            return
+
+        # Pre-tokenize each source chunk and resolve its bibliography number.
+        chunk_refs: List[Tuple[frozenset, int, Optional[str]]] = []
+        for doc in sources:
+            src = doc.get("source", "").strip()
+            bib_num = bib_map.get(src)
+            if bib_num is None:
+                continue
+            page = doc.get("page")
+            page_str = str(page) if page and str(page) != "N/A" else None
+            chunk_refs.append((self._tokenize(doc.get("content", "")), bib_num, page_str))
+
+        if not chunk_refs:
+            return
+
+        new_lines: List[str] = []
+        tagged_count = 0
+
+        for line in section["content"].split("\n"):
+            # Preserve headings and blank lines as-is.
+            if not line.strip() or line.lstrip().startswith("#"):
+                new_lines.append(line)
+                continue
+
+            # Split into (sentence, separator, sentence, separator, …) preserving
+            # the inter-sentence whitespace via the capturing group in the regex.
+            parts = _SENTENCE_SPLIT_RE.split(line)
+            new_parts: List[str] = []
+
+            for j, part in enumerate(parts):
+                # Odd-indexed parts are the captured whitespace separators.
+                if j % 2 != 0:
+                    new_parts.append(part)
+                    continue
+
+                sent_tok = self._tokenize(part)
+                if len(sent_tok) < _MIN_SENTENCE_TOKENS:
+                    new_parts.append(part)
+                    continue
+
+                # Collect matching pages grouped by bibliography number.
+                pages_by_num: Dict[int, List[str]] = {}
+                for chunk_tok, bib_num, page_str in chunk_refs:
+                    if len(sent_tok & chunk_tok) >= _MIN_CITATION_OVERLAP:
+                        if bib_num not in pages_by_num:
+                            pages_by_num[bib_num] = []
+                        if page_str and page_str not in pages_by_num[bib_num]:
+                            pages_by_num[bib_num].append(page_str)
+
+                tags: List[str] = []
+                for bib_num in sorted(pages_by_num.keys()):
+                    pages = pages_by_num[bib_num]
+                    if not pages:
+                        tag = f"[cite:{bib_num}]"
+                    elif len(pages) == 1:
+                        tag = f"[cite:{bib_num}, p.{pages[0]}]"
+                    else:
+                        tag = f"[cite:{bib_num}, pp.{','.join(pages)}]"
+                    # Skip if this document is already cited in this sentence.
+                    if not re.search(rf'\[cite:{bib_num}[,\]]', part):
+                        tags.append(tag)
+
+                if tags:
+                    # Insert tags before the trailing sentence-ending punctuation.
+                    trailing_m = re.search(r'([.!?])\s*$', part)
+                    if trailing_m:
+                        pos = trailing_m.start()
+                        new_parts.append(
+                            part[:pos] + " " + " ".join(tags) + part[pos:]
+                        )
+                    else:
+                        new_parts.append(part.rstrip() + " " + " ".join(tags))
+                    tagged_count += len(tags)
+                else:
+                    new_parts.append(part)
+
+            new_lines.append("".join(new_parts))
+
+        if tagged_count > 0:
+            report_state.replace_section(section["id"], "\n".join(new_lines))
+            logger.info(
+                f"[{self.id}] Section {section_idx + 1}: "
+                f"{tagged_count} citation tag(s) inserted."
+            )
+        else:
+            logger.info(
+                f"[{self.id}] Section {section_idx + 1}: "
+                f"no citation matches above threshold — section unchanged."
+            )
 
     def _get_node_by_name(self, agent_name: str) -> Optional[Node]:
         for node in self.nodes.values():

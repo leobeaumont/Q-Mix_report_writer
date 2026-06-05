@@ -181,10 +181,18 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
     (PhaseType.SECTION_REVIEW, "Reviewer"): (
         "Audit ONLY the section shown under '### Section Content'. "
         "Do not comment on any other section of the report. "
-        "If the section is factually correct, logically coherent, and scientifically "
-        "rigorous, output ONLY `[NO_REVISION_NEEDED]` and nothing else. "
-        "Otherwise, for each issue state: (1) the specific problem, "
-        "(2) the exact correction required. Be concise and actionable."
+        "Source chunks retrieved when this section was written are provided below the section text. "
+        "Use them for fact-checking as follows:\n"
+        "  - VERIFY: if a specific claim (number, named entity, technical term) appears in a source chunk, it is confirmed.\n"
+        "  - IGNORE absence: if a claim is not present in the provided chunks, do NOT flag it as unsupported — "
+        "those chunks cover only the drafting round; earlier research phases may have grounded it.\n"
+        "  - FLAG contradictions: if a claim directly contradicts information in a provided chunk, report it.\n"
+        "  - FLAG hallucinated specifics: if a highly specific data point (exact number, formula, proper name) "
+        "appears nowhere in your entire context, flag it as potentially hallucinated.\n"
+        "Your response must end with EITHER your list of corrections OR `[NO_REVISION_NEEDED]` — never both. "
+        "If no issues were found, output ONLY `[NO_REVISION_NEEDED]` and nothing else. "
+        "If any issue was found, output ONLY your corrections — do NOT append `[NO_REVISION_NEEDED]` after them. "
+        "For each issue state: (1) the specific problem, (2) the exact correction required. Be concise and actionable."
     ),
     # SECTION_REVIEW — revision round
     (PhaseType.SECTION_REVIEW, "Data Analyst"): (

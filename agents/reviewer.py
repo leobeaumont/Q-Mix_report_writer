@@ -32,10 +32,32 @@ class Reviewer(Node):
         except Exception:
             return False
 
+    def _build_source_docs_block(self, sources: list) -> str:
+        """Format the RAG chunks used to write the current section.
+
+        Only file reference and chunk text are included — internal IDs and
+        distance scores are omitted to keep the block readable for the LLM.
+        """
+        if not sources:
+            return ""
+        lines = [
+            "\n\n### Source Documents (retrieved for this section):",
+            "These chunks were fetched from the knowledge base when this section was written.",
+            "Use them to verify specific factual claims. Not every claim must appear here —",
+            "other sources from earlier pipeline phases may also have grounded it.\n",
+        ]
+        for doc in sources:
+            source_label = doc.get("source", "Unknown")
+            page = doc.get("page", "N/A")
+            content = doc.get("content", "").strip()
+            lines.append(f"---\n[Source: {source_label} | Page: {page}]\n{content}\n")
+        return "\n".join(lines)
+
     def _get_review_content(self) -> tuple:
         """Return (report_label, report_content) appropriate for the current phase.
 
-        SECTION_REVIEW: single section text — no truncation needed.
+        SECTION_REVIEW: single section text followed by the RAG source chunks that
+            were retrieved when the section was written, for fact-checking.
         VALIDATION window review: the sections in the current window (complete text).
         VALIDATION synthesis: a compact section-list overview — full content not needed
             since findings are passed through get_context_block validation_notes.
@@ -47,7 +69,8 @@ class Reviewer(Node):
             if 0 <= idx < len(sections):
                 section = sections[idx]
                 header = f"Section ID: {section['id']} | Title: {section['title'] or '(untitled)'}\n\n"
-                return "Section Content", header + section["content"]
+                source_block = self._build_source_docs_block(section.get("sources", []))
+                return "Section Content", header + section["content"] + source_block
             return "Section Content", "[No section content available]"
 
         if self._is_validation_phase():

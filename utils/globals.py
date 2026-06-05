@@ -51,6 +51,9 @@ class ReportState(Singleton):
         # VALIDATION sliding-window state
         self.validation_window: Optional[tuple] = None  # (window_idx, n_windows, [section_dicts])
         self.validation_notes: List[str] = []           # per-window Reviewer outputs
+        # Bibliography (built once before SECTION_REVIEW, never modified after)
+        self.bibliography: str = ""
+        self.bibliography_map: Dict[str, int] = {}      # source filename → bib number
 
     def reset(self):
         self.content = ""
@@ -63,6 +66,8 @@ class ReportState(Singleton):
         self.review_section_idx = 0
         self.validation_window = None
         self.validation_notes = []
+        self.bibliography = ""
+        self.bibliography_map = {}
 
     def add_deficiency(self, topic: str) -> None:
         """Record a topic the Researcher confirmed is absent from the knowledge base."""
