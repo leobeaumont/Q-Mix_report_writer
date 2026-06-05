@@ -189,10 +189,11 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "  - FLAG contradictions: if a claim directly contradicts information in a provided chunk, report it.\n"
         "  - FLAG hallucinated specifics: if a highly specific data point (exact number, formula, proper name) "
         "appears nowhere in your entire context, flag it as potentially hallucinated.\n"
-        "Your response must end with EITHER your list of corrections OR `[NO_REVISION_NEEDED]` — never both. "
-        "If no issues were found, output ONLY `[NO_REVISION_NEEDED]` and nothing else. "
-        "If any issue was found, output ONLY your corrections — do NOT append `[NO_REVISION_NEEDED]` after them. "
-        "For each issue state: (1) the specific problem, (2) the exact correction required. Be concise and actionable."
+        "DECISION RULE — choose exactly one branch and follow it literally:\n"
+        "  • If ZERO issues found → write the single token `[NO_REVISION_NEEDED]` and stop. Nothing else.\n"
+        "  • If ANY issue found → list each issue as (1)/(2)/… with its correction and stop. "
+        "Do NOT write `[NO_REVISION_NEEDED]` anywhere in your response when you have listed corrections.\n"
+        "These two branches are mutually exclusive. Mixing them is an error."
     ),
     # SECTION_REVIEW — revision round
     (PhaseType.SECTION_REVIEW, "Data Analyst"): (

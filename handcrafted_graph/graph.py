@@ -398,7 +398,23 @@ class HandcraftedGraph:
                 if reviewer_node and reviewer_node.outputs
                 else ""
             )
-            if "[NO_REVISION_NEEDED]" in reviewer_output:
+            # Robust signal check: skip revision only when the response either
+            # contains [NO_REVISION_NEEDED] as its sole content, or when any
+            # additional content is purely positive confirmation (not corrections).
+            # Handles the case where the model appends the signal after real corrections.
+            _signal = "[NO_REVISION_NEEDED]"
+            _CORRECTION_RE = re.compile(
+                r'\*{0,2}Correction:|incorrect|contradicts|hallucinated|misrepresent'
+                r'|not verifiable|not supported|not directly supported|overreaches'
+                r'|remove the claim|replace.*with',
+                re.IGNORECASE,
+            )
+            _without_signal = reviewer_output.replace(_signal, "").strip().strip("-").strip()
+            _is_clean_pass = (
+                _signal in reviewer_output
+                and not _CORRECTION_RE.search(_without_signal)
+            )
+            if _is_clean_pass:
                 logger.info(
                     f"  [{phase.name.value}] Section {i + 1}/{n_sections}: "
                     f"no revision needed — skipping."
