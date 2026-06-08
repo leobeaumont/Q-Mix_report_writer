@@ -20,6 +20,11 @@ def get_llm_config() -> dict:
     return get_config().get("llm", {})
 
 
+def get_rag_config() -> dict:
+    """Convenience accessor for the rag section of the config."""
+    return get_config().get("rag", {})
+
+
 def get_llm(llm_name: Optional[str] = None):
     """
     Instantiate an LLM from the provider config in default.yaml.

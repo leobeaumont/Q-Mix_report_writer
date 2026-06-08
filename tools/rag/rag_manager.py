@@ -102,10 +102,21 @@ def _generate_chunk_id(source_name: str, chunk_idx: int) -> str:
 
 
 class RAGManager:
-    def __init__(self, collection_name="document_database"):
+    def __init__(self, collection_name="document_database", rerank_mode: str = "nomic", bm25_floor: int = 1):
+        """
+        rerank_mode:
+          "nomic"          — re-rank RRF candidates by nomic-embed-text cosine similarity (default)
+          "cross_encoder"  — re-rank with BAAI/bge-reranker-base (slowest, most accurate)
+
+        bm25_floor:
+          Minimum BM25-only chunks guaranteed in the final result.
+          Only injects if a BM25-only chunk ranked in the top 10 of the full RRF pool
+          (i.e. was genuinely competitive). Falls back to all-vector if none qualify.
+          Set to 0 to disable. Default: 1.
+        """
         self.client = chromadb.PersistentClient(path="./chroma_data")
         """self.client = chromadb.HttpClient(
-            host="[IP]", 
+            host="[IP]",
             port=[PORT]
         )"""
 
@@ -118,6 +129,8 @@ class RAGManager:
             name=collection_name,
             embedding_function=self.emb_fn
         )
+        self.rerank_mode = rerank_mode
+        self.bm25_floor = bm25_floor
         self._reranker_model_name = "BAAI/bge-reranker-base"
         self._reranker = None
         self._reranker_tokenizer = None
@@ -130,8 +143,12 @@ class RAGManager:
 
     def _embed_one(self, base_url: str, text: str) -> List[float]:
         """Embed a single text, truncating to _EMBED_MAX_CHARS if needed."""
+        return self._embed_batch(base_url, [text])[0]
+
+    def _embed_batch(self, base_url: str, texts: List[str]) -> List[List[float]]:
+        """Embed multiple texts in a single Ollama API call."""
         payload = json.dumps(
-            {"model": "nomic-embed-text", "input": [text[:_EMBED_MAX_CHARS]]}
+            {"model": "nomic-embed-text", "input": [t[:_EMBED_MAX_CHARS] for t in texts]}
         ).encode()
         req = urllib.request.Request(
             f"{base_url}/api/embed",
@@ -139,7 +156,7 @@ class RAGManager:
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read())["embeddings"][0]
+            return json.loads(resp.read())["embeddings"]
 
     def _embed_texts(self, texts: List[str]) -> List[List[float]]:
         """Call Ollama directly for embeddings, bypassing ChromaDB's internal routing.
@@ -173,6 +190,7 @@ class RAGManager:
                 "source": self._bm25_metas[i].get("source_name", "Unknown Source"),
                 "page": self._bm25_metas[i].get("page_number", "N/A"),
                 "distance": None,
+                "bm25_score": round(float(scores[i]), 4),
                 "id": self._bm25_ids[i],
             }
             for i in top_indices
@@ -184,18 +202,40 @@ class RAGManager:
 
         score(d) = Σ  1 / (k + rank_i(d) + 1)
         k=60 is the standard constant from the original RRF paper.
+
+        Attaches to each returned chunk:
+          rrf_score  — the fused score (higher is better)
+          in_vector  — True if this chunk appeared in candidate_lists[0] (vector pool)
+          in_bm25    — True if this chunk appeared in candidate_lists[1] (BM25 pool)
         """
         scores: Dict[str, float] = {}
         by_id: Dict[str, Dict] = {}
-        for candidates in candidate_lists:
+        pool_membership: Dict[str, set] = {}
+        for pool_idx, candidates in enumerate(candidate_lists):
             for rank, c in enumerate(candidates):
                 cid = c["id"]
                 scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
                 if cid not in by_id:
-                    by_id[cid] = c
-        return [by_id[cid] for cid in sorted(scores, key=scores.__getitem__, reverse=True)]
+                    by_id[cid] = dict(c)
+                else:
+                    # Merge pool-specific score fields that may only exist in one pool
+                    # (e.g. bm25_score lives on BM25 candidates, distance on vector ones)
+                    for score_key in ("bm25_score", "distance"):
+                        if c.get(score_key) is not None and by_id[cid].get(score_key) is None:
+                            by_id[cid][score_key] = c[score_key]
+                pool_membership.setdefault(cid, set()).add(pool_idx)
+        result = []
+        for cid in sorted(scores, key=scores.__getitem__, reverse=True):
+            doc = dict(by_id[cid])
+            pools = pool_membership.get(cid, set())
+            doc["rrf_score"] = round(scores[cid], 6)
+            doc["in_vector"] = 0 in pools
+            doc["in_bm25"] = 1 in pools
+            result.append(doc)
+        return result
 
     def _rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
+        """Cross-encoder reranking with BAAI/bge-reranker-base."""
         if self._reranker is None:
             import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -212,7 +252,40 @@ class RAGManager:
         if isinstance(scores, float):
             scores = [scores]
         ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
-        return [c for _, c in ranked[:top_k]]
+        result = []
+        for score, c in ranked[:top_k]:
+            doc = dict(c)
+            doc["reranker_score"] = round(float(score), 4)
+            result.append(doc)
+        return result
+
+    def _rerank_nomic(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
+        """Re-rank candidates by cosine similarity to the query using nomic-embed-text.
+
+        Embeds the query and all candidate chunks, then sorts by cosine similarity.
+        This is lighter than the cross-encoder but can favour semantically similar
+        chunks over keyword-match chunks that BM25 surfaced.
+        """
+        import math
+        base_url = _get_ollama_base_url().rstrip("/")
+        texts = [query] + [c["content"] for c in candidates]
+        embeddings = self._embed_batch(base_url, texts)
+        q_emb = embeddings[0]
+        q_norm = math.sqrt(sum(x * x for x in q_emb)) or 1.0
+
+        def cosine_sim(emb: List[float]) -> float:
+            dot = sum(a * b for a, b in zip(q_emb, emb))
+            norm = math.sqrt(sum(x * x for x in emb)) or 1.0
+            return dot / (q_norm * norm)
+
+        scored = []
+        for c, emb in zip(candidates, embeddings[1:]):
+            doc = dict(c)
+            doc["nomic_score"] = round(cosine_sim(emb), 4)
+            scored.append(doc)
+
+        scored.sort(key=lambda x: x["nomic_score"], reverse=True)
+        return scored[:top_k]
 
     def _get_candidates(self, query_text: str, n_candidates: int, distance_threshold: float) -> List[Dict]:
         """Fetch and filter raw candidates from ChromaDB for a single query."""
@@ -238,13 +311,62 @@ class RAGManager:
             if dist <= distance_threshold
         ]
 
+    def _apply_bm25_floor(self, ranked: List[Dict], full_pool: List[Dict], floor: int, top_k: int) -> List[Dict]:
+        """Guarantee at least `floor` BM25-only chunks in the final top_k result.
+
+        Only considers BM25-only chunks from the top-10 of the RRF-sorted full_pool —
+        if no BM25-only chunk ranked that high, the all-vector result is kept as-is.
+        Injects by replacing the lowest-ranked vector-only chunks in `ranked`.
+        """
+        if floor <= 0:
+            return ranked
+
+        result = list(ranked)
+        bm25_only_count = sum(1 for c in result if c.get("in_bm25") and not c.get("in_vector"))
+        if bm25_only_count >= floor:
+            return result
+
+        needed = floor - bm25_only_count
+        result_ids = {c["id"] for c in result}
+
+        # Only inject from the top-10 of the RRF pool — low-ranked BM25 chunks are not worth forcing in
+        eligible = [
+            c for c in full_pool[:10]
+            if c.get("in_bm25") and not c.get("in_vector") and c["id"] not in result_ids
+        ]
+        to_inject = eligible[:needed]
+        if not to_inject:
+            return result
+
+        for chunk in to_inject:
+            # Replace the last (lowest-ranked) vector-only chunk
+            for j in range(len(result) - 1, -1, -1):
+                if result[j].get("in_vector") and not result[j].get("in_bm25"):
+                    result[j] = chunk
+                    break
+            else:
+                if len(result) < top_k:
+                    result.append(chunk)
+
+        return result
+
     def query_docs(self, query_text: str, n_candidates: int = 15, top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
         """
-        Three-stage hybrid retrieval: vector search + BM25 → RRF merge → cross-encoder rerank.
+        Hybrid retrieval: vector search + BM25 → RRF merge → optional rerank.
 
-        n_candidates:       chunks fetched per retriever (wide net)
-        top_k:              chunks returned after reranking (tight output)
-        distance_threshold: cosine distance ceiling for the vector path
+        Reranking is controlled by self.rerank_mode (set at construction time):
+          None             — return RRF top-k directly
+          "nomic"          — re-rank by nomic-embed-text cosine similarity
+          "cross_encoder"  — re-rank with BAAI/bge-reranker-base
+
+        Every returned chunk carries debug fields:
+          distance      — cosine distance from vector search (None if BM25-only)
+          bm25_score    — BM25 score (None if vector-only)
+          rrf_score     — RRF fusion score
+          in_vector     — True if chunk came from the vector pool
+          in_bm25       — True if chunk came from the BM25 pool
+          nomic_score   — cosine similarity score when rerank_mode="nomic"
+          reranker_score — cross-encoder score when rerank_mode="cross_encoder"
         """
         count = self.collection.count()
         if count == 0:
@@ -255,14 +377,19 @@ class RAGManager:
         merged = self._rrf_merge(vector_cands, bm25_cands)
         if not merged:
             return []
-        return self._rerank(query_text, merged, top_k)
+        if self.rerank_mode == "cross_encoder":
+            ranked = self._rerank(query_text, merged, top_k)
+        else:
+            ranked = self._rerank_nomic(query_text, merged, top_k)
+        return self._apply_bm25_floor(ranked, merged, self.bm25_floor, top_k)
 
     def query_docs_multi(self, queries: List[str], top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
         """
         Multi-query hybrid retrieval: for each query run vector + BM25, RRF-merge per query,
-        then deduplicate across queries and cross-encoder rerank the final pool.
+        then deduplicate across queries and optionally rerank the final pool.
 
-        The first query is used as the anchor for cross-encoder reranking.
+        The first query is used as the anchor for reranking.
+        See query_docs for debug field descriptions.
         """
         count = self.collection.count()
         if count == 0:
@@ -281,7 +408,11 @@ class RAGManager:
 
         if not merged:
             return []
-        return self._rerank(queries[0], merged, top_k)
+        if self.rerank_mode == "cross_encoder":
+            ranked = self._rerank(queries[0], merged, top_k)
+        else:
+            ranked = self._rerank_nomic(queries[0], merged, top_k)
+        return self._apply_bm25_floor(ranked, merged, self.bm25_floor, top_k)
     
     def add_documents(self, documents, metadatas, ids, embeddings: Optional[List] = None):
         """

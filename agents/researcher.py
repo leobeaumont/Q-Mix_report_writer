@@ -3,7 +3,7 @@ import re
 from graph.node import Node
 from agents.agent_registry import AgentRegistry
 from tools.rag import RAGManager
-from utils.config import get_llm
+from utils.config import get_llm, get_rag_config
 from utils.globals import ReportState, SourceBuffer
 from prompt.prompt_set_registry import PromptSetRegistry
 
@@ -45,7 +45,9 @@ class Researcher(Node):
         self.prompt_set = PromptSetRegistry.get("redacting")
         self.role = role or "Researcher"
         self.report = ReportState.instance()
-        self.rag = RAGManager()
+        rerank_mode = get_rag_config().get("rerank_mode", "nomic")
+        bm25_floor = int(get_rag_config().get("bm25_floor", 1))
+        self.rag = RAGManager(rerank_mode=rerank_mode, bm25_floor=bm25_floor)
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
@@ -134,7 +136,18 @@ class Researcher(Node):
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             execution_trace.trace[-1]["RAG"]["sources"] = [
-                {"id": d["id"], "source": d["source"], "page": d.get("page", "N/A")}
+                {
+                    "id": d["id"],
+                    "source": d["source"],
+                    "page": d.get("page", "N/A"),
+                    "vector_distance": d.get("distance"),
+                    "bm25_score": d.get("bm25_score"),
+                    "rrf_score": d.get("rrf_score"),
+                    "in_vector": d.get("in_vector", False),
+                    "in_bm25": d.get("in_bm25", False),
+                    "nomic_score": d.get("nomic_score"),
+                    "reranker_score": d.get("reranker_score"),
+                }
                 for d in documents
             ]
 
@@ -210,7 +223,18 @@ class Researcher(Node):
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             execution_trace.trace[-1]["RAG"]["sources"] = [
-                {"id": d["id"], "source": d["source"], "page": d.get("page", "N/A")}
+                {
+                    "id": d["id"],
+                    "source": d["source"],
+                    "page": d.get("page", "N/A"),
+                    "vector_distance": d.get("distance"),
+                    "bm25_score": d.get("bm25_score"),
+                    "rrf_score": d.get("rrf_score"),
+                    "in_vector": d.get("in_vector", False),
+                    "in_bm25": d.get("in_bm25", False),
+                    "nomic_score": d.get("nomic_score"),
+                    "reranker_score": d.get("reranker_score"),
+                }
                 for d in documents
             ]
 

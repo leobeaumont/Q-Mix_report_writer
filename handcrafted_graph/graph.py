@@ -936,8 +936,13 @@ class HandcraftedGraph:
             "multiple sections: pick ONE authoritative value (prefer the one cited with a "
             "specific source page) and list EVERY section that must be updated to use it. "
             "Never say 'reconcile' or 'align' — always give the exact value to use.\n"
-            "2. For content duplication: name the section to keep and the section to shorten.\n"
-            "3. For severe transitions: name which section's opening or closing sentence to revise."
+            "2. For content duplication: name the section to keep and the section to shorten. "
+            "Give the shortening section a specific UNIQUE angle to retain so it cannot end up "
+            "saying the same thing as the section it is being differentiated from.\n"
+            "3. For severe transitions: name which section's opening or closing sentence to revise.\n"
+            "4. NEVER write 'because section_X says' or 'consistent with section_X' or 'as per "
+            "section_Y' — each instruction must stand alone. Reference only physical facts, "
+            "observational evidence, or source citations, never other section IDs."
         )
         section_list = report_state.list_sections(verbose=True)
         user = (
@@ -945,8 +950,9 @@ class HandcraftedGraph:
             f"### Identified issues\n{combined_issues}\n\n"
             "Output ONLY a bulleted list using this exact format:\n"
             "  - <section_id>: <specific action with exact value if applicable>\n\n"
-            "One bullet per section that needs changing. If the same value must be used in "
-            "multiple sections, list each section separately with the same explicit value. "
+            "One bullet per section that needs changing. If the same factual value must appear in "
+            "multiple sections, list each section separately and give EACH a distinct angle or "
+            "sub-topic so they do not duplicate each other. "
             "Use exact section IDs from the list above. Skip praise or general observations."
         )
         message = [

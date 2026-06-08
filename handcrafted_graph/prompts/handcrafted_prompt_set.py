@@ -15,6 +15,8 @@ prompt set instance works across all phases without re-instantiation.
 
 from __future__ import annotations
 
+import re
+
 from prompt.prompt_set import PromptSet
 from prompt.prompt_set_registry import PromptSetRegistry
 from prompt.redacting_prompt_set import (
@@ -23,6 +25,23 @@ from prompt.redacting_prompt_set import (
     JSON_SCHEMA,
 )
 from handcrafted_graph.phases import PhaseType
+
+
+def _extract_section_directive(directive: str, section_id: str) -> str:
+    """Return the instruction for section_id from a multi-section directive string.
+
+    The directive is a bullet list of the form:
+        - section_N: <instruction text>
+        - section_M: <instruction text>
+        ...
+    Each instruction may span multiple lines via indentation.
+    Returns the instruction text (stripped), or "" if section_id is not found.
+    """
+    pattern = rf'(?:^|\n)\s*-\s*{re.escape(section_id)}\s*:\s*(.*?)(?=\n\s*-\s*section_|\Z)'
+    match = re.search(pattern, directive, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +219,8 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "BE CONCISE: report only actionable issues — do not narrate the verification process or list "
         "confirmed claims. A short response is better than an exhaustive one.\n"
         "DECISION RULE — choose exactly one branch and follow it literally:\n"
-        "  • If ZERO issues found → write the single token `[NO_REVISION_NEEDED]` and stop. Nothing else.\n"
-        "  • If ANY issue found → list each issue as (1)/(2)/… with its correction and stop. "
+        "  - If ZERO issues found → write the single token `[NO_REVISION_NEEDED]` and stop. Nothing else.\n"
+        "  - If ANY issue found → list each issue as (1)/(2)/… with its correction and stop. "
         "Do NOT write `[NO_REVISION_NEEDED]` anywhere in your response when you have listed corrections.\n"
         "These two branches are mutually exclusive. Mixing them is an error."
     ),
@@ -233,18 +252,25 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
     # VALIDATION — window review round
     (PhaseType.VALIDATION, "Reviewer"): (
         "Review ONLY the sections shown in your current window. "
-        "Apply a HIGH threshold — only report an issue if it is a serious problem:\n"
-        "  • Factual contradiction: the same entity, measurement, or claim is stated with "
-        "conflicting values in adjacent sections.\n"
-        "  • Significant duplication: the same factual content, key equations, or core "
-        "argument appears in two adjacent sections with only minor rephrasing, adding nothing new.\n"
-        "  • Severe transition: two adjacent sections discuss completely unrelated topics "
-        "with no logical connection — not merely a missing bridging sentence.\n"
-        "Do NOT flag: absent bridging sentences, imperfect phrasing, stylistic roughness, "
-        "or any issue that does not impede understanding. "
-        "Do NOT attempt per-section fact-checking — no source chunks are available here. "
-        "Do NOT flag sections as missing. "
-        "If no serious issues are found, state so in one sentence.\n\n"
+        "Apply a VERY HIGH threshold — flag an issue ONLY if it meets the EXACT definition "
+        "below. When in doubt, do NOT flag.\n\n"
+        "  - Factual contradiction: two sections EXPLICITLY state the SAME specific quantity "
+        "with CLEARLY DIFFERENT NUMBERS (e.g. Section_A says X = 5 GeV, Section_B says "
+        "X = 10 GeV). The numerical values must be unmistakably incompatible.\n"
+        "    NOT a contradiction: different sections citing different papers or fitting "
+        "methods for the same result; one section saying a value comes from method A and "
+        "another saying it comes from method B; different levels of precision; a section "
+        "not mentioning a value another section discusses.\n\n"
+        "  - Significant duplication: near-identical sentences or full paragraphs copied "
+        "across sections — a reader could delete the block from one section and lose "
+        "nothing. NOT duplication: same concept or result discussed from different angles.\n\n"
+        "  - Severe transition: two adjacent sections discuss entirely unrelated topics "
+        "with no logical connection — NOT merely an imperfect bridging sentence.\n\n"
+        "Do NOT flag: different cited sources for the same claim, different derivation "
+        "methods for the same value, absent bridging sentences, narrower scope in one "
+        "section, imperfect phrasing, or anything a physicist would not find confusing. "
+        "Do NOT attempt per-section fact-checking — no source chunks are available here.\n\n"
+        "If no serious issues are found, state so in one sentence. "
         "In the synthesis round, consolidate all window notes into a concise global report "
         "covering only the serious issues identified above."
     ),
@@ -311,13 +337,25 @@ class HandcraftedPromptSet(PromptSet):
                     f"| Section {idx + 1} of {len(sections)}\n"
                 )
             # Inject per-section actions from a previous failed validation pass.
+            # Only the instruction for THIS section is shown — the full multi-section
+            # directive must never be exposed, as the Reviewer will otherwise apply
+            # another section's instructions to the current one.
             directive = report_state.validation_directive
-            if directive:
-                block += (
-                    f"\n**Validation directive (from previous failed validation — "
-                    f"apply EXACTLY as stated; do not introduce different values):**\n"
-                    f"{directive}\n"
-                )
+            if directive and 0 <= idx < len(sections):
+                current_id = sections[idx]["id"]
+                section_instruction = _extract_section_directive(directive, current_id)
+                if section_instruction:
+                    block += (
+                        f"\n**Validation directive for `{current_id}` (apply EXACTLY — "
+                        f"do not introduce different values):**\n"
+                        f"{section_instruction}\n"
+                    )
+                else:
+                    block += (
+                        f"\n**Validation note:** `{current_id}` was NOT flagged for any changes "
+                        f"in the previous validation pass. **Output [NO_REVISION_NEEDED] "
+                        f"immediately. Do not perform fact-checking or review of this section.**\n"
+                    )
 
         if phase == PhaseType.VALIDATION:
             from utils.globals import ReportState

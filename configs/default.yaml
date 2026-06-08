@@ -30,6 +30,15 @@ training:
 evaluation:
   num_rounds: 2
 
+rag:
+  # Reranking mode applied after RRF fusion.
+  # Options: "nomic" (nomic-embed-text cosine, default), "cross_encoder" (BAAI/bge-reranker-base)
+  rerank_mode: nomic
+  # Minimum BM25-only chunks guaranteed per retrieval result.
+  # Only injects if the BM25 chunk ranked in the top-10 of the RRF pool (genuinely competitive).
+  # Falls back to all-vector if no qualifying BM25 chunk exists. Set to 0 to disable.
+  bm25_floor: 1
+
 llm:
   default_model: alibayram/Qwen3-30B-A3B-Instruct-2507
   temperature: 0.7
