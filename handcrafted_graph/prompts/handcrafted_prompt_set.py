@@ -346,9 +346,15 @@ class HandcraftedPromptSet(PromptSet):
                 section_instruction = _extract_section_directive(directive, current_id)
                 if section_instruction:
                     block += (
-                        f"\n**Validation directive for `{current_id}` (apply EXACTLY — "
-                        f"do not introduce different values):**\n"
-                        f"{section_instruction}\n"
+                        f"\n**REVISION DIRECTIVE for `{current_id}` — this is your ONLY task:**\n"
+                        f"{section_instruction}\n\n"
+                        f"**STRICT SCOPE:** Do NOT fact-check any other claims in this section. "
+                        f"Do NOT flag issues not listed in the directive above. "
+                        f"Do NOT introduce new corrections — the directive is the complete and "
+                        f"authoritative list of what must change. "
+                        f"Check ONLY whether the directive has been applied: if not yet applied, "
+                        f"output the remaining items as numbered corrections; "
+                        f"if fully applied, output [NO_REVISION_NEEDED] and nothing else.\n"
                     )
                 else:
                     block += (

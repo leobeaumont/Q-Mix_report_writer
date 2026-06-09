@@ -61,6 +61,7 @@ class ReportState(Singleton):
         # Bibliography (built once before SECTION_REVIEW, never modified after)
         self.bibliography: str = ""
         self.bibliography_map: Dict[str, int] = {}      # source filename → bib number
+        self.citation_counts: Dict[int, int] = {}       # bib number → times cited in text
         # Validation loop state
         self.validation_directive: str = ""             # per-section actions from failed validation
 
@@ -77,6 +78,7 @@ class ReportState(Singleton):
         self.validation_notes = []
         self.bibliography = ""
         self.bibliography_map = {}
+        self.citation_counts = {}
         self.validation_directive = ""
 
     def add_deficiency(self, topic: str) -> None:

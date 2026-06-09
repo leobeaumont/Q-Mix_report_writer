@@ -38,9 +38,9 @@ logger = logging.getLogger("handcrafted_graph")
 # ------------------------------------------------------------------
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])(\s+)(?=[A-Z"\'])')
 _TOKEN_RE          = re.compile(r'[a-zA-Z0-9]+')
-_MIN_TOKEN_LEN        = 3   # minimum token length to be considered meaningful
-_MIN_CITATION_OVERLAP = 3   # shared tokens required to assign a citation
-_MIN_SENTENCE_TOKENS  = 3   # sentence must have this many tokens to be a candidate
+_MIN_TOKEN_LEN        = 5   # minimum token length to be considered meaningful
+_MIN_CITATION_OVERLAP = 5   # shared tokens required to assign a citation
+_MIN_SENTENCE_TOKENS  = 5   # sentence must have this many tokens to be a candidate
 
 _STOPWORDS = frozenset({
     # 2–3 letter function words
@@ -131,7 +131,7 @@ class HandcraftedGraph:
         input: Dict[str, str],
         max_tries: int = 3,
         max_time: int = 300,
-        max_validation_attempts: int = 2,
+        max_validation_attempts: int = 1,
     ) -> Tuple[List[Any], int]:
         """Run the full phase pipeline and return the finished report.
 
@@ -185,10 +185,7 @@ class HandcraftedGraph:
             f"  Starting review & correction phase…\n"
         )
 
-        # ── Bibliography — built once; guard prevents rebuild on validation retries ──
         report_state = ReportState.instance()
-        if not report_state.bibliography_map:
-            self._build_bibliography()
 
         # Split correction phases so the validation loop can restart only SECTION_REVIEW.
         section_review_phases = [p for p in correction_phases if p.section_aware]
@@ -307,6 +304,7 @@ class HandcraftedGraph:
             self._clear_all_memory()
 
         # ── Assemble final report ──────────────────────────────────────────
+        self._build_bibliography()
         report = report_state.content
         if report_state.bibliography:
             report = report.rstrip() + "\n\n" + report_state.bibliography
@@ -503,10 +501,15 @@ class HandcraftedGraph:
                 r'|remove the claim|replace.*with',
                 re.IGNORECASE,
             )
+            # Numbered items like "(1) ..." are the Reviewer's standard format for
+            # corrections. If any appear alongside [NO_REVISION_NEEDED], the signal
+            # is contradictory — treat the numbered corrections as authoritative.
+            _NUMBERED_ITEM_RE = re.compile(r'^\s*\(\d+\)', re.MULTILINE)
             _without_signal = reviewer_output.replace(_signal, "").strip().strip("-").strip()
             _is_clean_pass = (
                 _signal in reviewer_output
                 and not _CORRECTION_RE.search(_without_signal)
+                and not _NUMBERED_ITEM_RE.search(_without_signal)
             )
             if _is_clean_pass:
                 logger.info(
@@ -975,41 +978,45 @@ class HandcraftedGraph:
     _ARXIV_OLD_RE = re.compile(r"^(\d{7})(v\d+)?\.pdf$", re.IGNORECASE)
 
     def _build_bibliography(self) -> None:
-        """Build a deduplicated markdown bibliography from all collected sources.
+        """Build the final bibliography text using per-entry citation counts.
 
-        Deduplicates by source filename, preserving first-encounter order
-        (PLANNING → RESEARCH → DRAFTING sections).  Populates:
-          - ReportState.bibliography      : the markdown text
-          - ReportState.bibliography_map  : {source_filename: bib_number}
+        bibliography_map is populated incrementally by _apply_citation_tags —
+        only sources that were actually cited in the text have entries there.
+        All other collected sources are listed under Consulted Sources (no tag).
 
-        No LLM calls — pure metadata extraction from already-collected sources.
+        Must be called after all _apply_citation_tags() calls.
         """
         report_state = ReportState.instance()
-        all_sources = report_state.sources
+        bib_map = report_state.bibliography_map
+        counts  = report_state.citation_counts
 
-        if not all_sources:
+        if not report_state.sources:
             logger.warning(f"[{self.id}] Bibliography: no sources collected — skipping.")
             return
 
-        # Deduplicate by source filename, keep first-seen doc dict for metadata.
-        seen: Dict[str, dict] = {}
-        for doc in all_sources:
+        cited_lines: list = ["## Bibliography\n"]
+        for source_name, num in sorted(bib_map.items(), key=lambda x: x[1]):
+            c = counts.get(num, 0)
+            count_tag = f" *({c} citation{'s' if c != 1 else ''})*"
+            cited_lines.append(self._format_bib_entry(num, source_name) + count_tag)
+
+        seen: set = set()
+        consulted_lines: list = []
+        for doc in report_state.sources:
             src = doc.get("source", "").strip()
-            if src and src not in seen:
-                seen[src] = doc
+            if src and src not in bib_map and src not in seen:
+                seen.add(src)
+                consulted_lines.append(self._format_consulted_entry(src))
 
-        # Build mapping and markdown in one pass.
-        bib_map: Dict[str, int] = {}
-        lines = ["## Bibliography\n"]
+        report_state.bibliography = "\n".join(cited_lines)
+        if consulted_lines:
+            report_state.bibliography += (
+                "\n\n### Consulted Sources\n\n" + "\n".join(consulted_lines)
+            )
 
-        for num, (source_name, doc) in enumerate(seen.items(), start=1):
-            bib_map[source_name] = num
-            lines.append(self._format_bib_entry(num, source_name))
-
-        report_state.bibliography_map = bib_map
-        report_state.bibliography = "\n".join(lines)
         logger.info(
-            f"[{self.id}] Bibliography built: {len(seen)} unique source(s)."
+            f"[{self.id}] Bibliography built: "
+            f"{len(cited_lines) - 1} cited, {len(consulted_lines)} consulted-only."
         )
 
     @classmethod
@@ -1031,6 +1038,19 @@ class HandcraftedGraph:
         ext = source_name.rsplit(".", 1)[-1].upper() if "." in source_name else ""
         type_tag = f" *({ext})*" if ext else ""
         return f"[{num}] **{source_name}**{type_tag}"
+
+    @classmethod
+    def _format_consulted_entry(cls, source_name: str) -> str:
+        """Return one markdown consulted-sources line (no citation number)."""
+        m = cls._ARXIV_NEW_RE.match(source_name)
+        if m:
+            return f"- **{source_name}** *(arXiv:{m.group(1)})*"
+        m = cls._ARXIV_OLD_RE.match(source_name)
+        if m:
+            return f"- **{source_name}** *(arXiv:{m.group(1)})*"
+        ext = source_name.rsplit(".", 1)[-1].upper() if "." in source_name else ""
+        type_tag = f" *({ext})*" if ext else ""
+        return f"- **{source_name}**{type_tag}"
 
     # ------------------------------------------------------------------
     # Citation tagging
@@ -1075,21 +1095,20 @@ class HandcraftedGraph:
 
         section = sections[section_idx]
         sources = section.get("sources", [])
-        bib_map = report_state.bibliography_map
+        bib_map = report_state.bibliography_map  # mutated in-place on first citation
 
-        if not sources or not bib_map:
+        if not sources:
             return
 
-        # Pre-tokenize each source chunk and resolve its bibliography number.
-        chunk_refs: List[Tuple[frozenset, int, Optional[str]]] = []
+        # Pre-tokenize each source chunk; bib numbers are assigned lazily.
+        chunk_refs: List[Tuple[frozenset, str, Optional[str]]] = []
         for doc in sources:
             src = doc.get("source", "").strip()
-            bib_num = bib_map.get(src)
-            if bib_num is None:
+            if not src:
                 continue
             page = doc.get("page")
             page_str = str(page) if page and str(page) != "N/A" else None
-            chunk_refs.append((self._tokenize(doc.get("content", "")), bib_num, page_str))
+            chunk_refs.append((self._tokenize(doc.get("content", "")), src, page_str))
 
         if not chunk_refs:
             return
@@ -1119,18 +1138,23 @@ class HandcraftedGraph:
                     new_parts.append(part)
                     continue
 
-                # Collect matching pages grouped by bibliography number.
-                pages_by_num: Dict[int, List[str]] = {}
-                for chunk_tok, bib_num, page_str in chunk_refs:
+                # Collect matching pages grouped by source name.
+                pages_by_src: Dict[str, List[str]] = {}
+                for chunk_tok, src_name, page_str in chunk_refs:
                     if len(sent_tok & chunk_tok) >= _MIN_CITATION_OVERLAP:
-                        if bib_num not in pages_by_num:
-                            pages_by_num[bib_num] = []
-                        if page_str and page_str not in pages_by_num[bib_num]:
-                            pages_by_num[bib_num].append(page_str)
+                        if src_name not in pages_by_src:
+                            pages_by_src[src_name] = []
+                        if page_str and page_str not in pages_by_src[src_name]:
+                            pages_by_src[src_name].append(page_str)
+
+                # Assign bib numbers lazily on first citation, then sort by number.
+                for src_name in pages_by_src:
+                    if src_name not in bib_map:
+                        bib_map[src_name] = len(bib_map) + 1
 
                 tags: List[str] = []
-                for bib_num in sorted(pages_by_num.keys()):
-                    pages = pages_by_num[bib_num]
+                for src_name, pages in sorted(pages_by_src.items(), key=lambda x: bib_map[x[0]]):
+                    bib_num = bib_map[src_name]
                     if not pages:
                         tag = f"[cite:{bib_num}]"
                     elif len(pages) == 1:
@@ -1140,6 +1164,9 @@ class HandcraftedGraph:
                     # Skip if this document is already cited in this sentence.
                     if not re.search(rf'\[cite:{bib_num}[,\]]', part):
                         tags.append(tag)
+                        report_state.citation_counts[bib_num] = (
+                            report_state.citation_counts.get(bib_num, 0) + 1
+                        )
 
                 if tags:
                     # Insert tags before the trailing sentence-ending punctuation.

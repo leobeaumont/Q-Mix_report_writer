@@ -45,8 +45,11 @@ class Researcher(Node):
         self.prompt_set = PromptSetRegistry.get("redacting")
         self.role = role or "Researcher"
         self.report = ReportState.instance()
-        rerank_mode = get_rag_config().get("rerank_mode", "nomic")
-        bm25_floor = int(get_rag_config().get("bm25_floor", 1))
+        rag_cfg = get_rag_config()
+        rerank_mode = rag_cfg.get("rerank_mode", "nomic")
+        bm25_floor = int(rag_cfg.get("bm25_floor", 1))
+        self.top_k_planning = int(rag_cfg.get("top_k_planning", 3))
+        self.top_k_drafting = int(rag_cfg.get("top_k_drafting", 5))
         self.rag = RAGManager(rerank_mode=rerank_mode, bm25_floor=bm25_floor)
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
@@ -66,6 +69,21 @@ class Researcher(Node):
             return PhaseState.instance().current_phase == PhaseType.SECTION_REVIEW
         except Exception:
             return False
+
+    def _current_top_k(self) -> int:
+        """Return top_k appropriate for the active phase.
+
+        PLANNING uses a lower value — the goal is topic discovery, not evidence depth.
+        All other phases (RESEARCH, DRAFTING, SECTION_REVIEW) use the drafting value.
+        """
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            if PhaseState.instance().current_phase == PhaseType.PLANNING:
+                return self.top_k_planning
+        except Exception:
+            pass
+        return self.top_k_drafting
 
     def _is_planning_phase(self) -> bool:
         try:
@@ -132,7 +150,7 @@ class Researcher(Node):
                 execution_trace.trace[-1]["RAG"]["response"] = signal
                 execution_trace.trace[-1]["Researcher"]["response"] = signal
             return signal
-        documents = self.rag.query_docs_multi(queries)
+        documents = self.rag.query_docs_multi(queries, top_k=self._current_top_k())
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             execution_trace.trace[-1]["RAG"]["sources"] = [
@@ -219,7 +237,7 @@ class Researcher(Node):
                 execution_trace.trace[-1]["RAG"]["response"] = signal
                 execution_trace.trace[-1]["Researcher"]["response"] = signal
             return signal
-        documents = self.rag.query_docs_multi(queries)
+        documents = self.rag.query_docs_multi(queries, top_k=self._current_top_k())
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             execution_trace.trace[-1]["RAG"]["sources"] = [

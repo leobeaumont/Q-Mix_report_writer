@@ -102,7 +102,7 @@ def _generate_chunk_id(source_name: str, chunk_idx: int) -> str:
 
 
 class RAGManager:
-    def __init__(self, collection_name="document_database", rerank_mode: str = "nomic", bm25_floor: int = 1):
+    def __init__(self, collection_name="document_database", rerank_mode: str = "nomic", bm25_floor: int = 1, top_k: int = 5):
         """
         rerank_mode:
           "nomic"          — re-rank RRF candidates by nomic-embed-text cosine similarity (default)
@@ -113,6 +113,9 @@ class RAGManager:
           Only injects if a BM25-only chunk ranked in the top 10 of the full RRF pool
           (i.e. was genuinely competitive). Falls back to all-vector if none qualify.
           Set to 0 to disable. Default: 1.
+
+        top_k:
+          Number of chunks returned per query. Default: 5.
         """
         self.client = chromadb.PersistentClient(path="./chroma_data")
         """self.client = chromadb.HttpClient(
@@ -131,6 +134,7 @@ class RAGManager:
         )
         self.rerank_mode = rerank_mode
         self.bm25_floor = bm25_floor
+        self.top_k = top_k
         self._reranker_model_name = "BAAI/bge-reranker-base"
         self._reranker = None
         self._reranker_tokenizer = None
@@ -350,7 +354,7 @@ class RAGManager:
 
         return result
 
-    def query_docs(self, query_text: str, n_candidates: int = 15, top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
+    def query_docs(self, query_text: str, n_candidates: int = 15, top_k: int = None, distance_threshold: float = 0.7) -> List[Dict]:
         """
         Hybrid retrieval: vector search + BM25 → RRF merge → optional rerank.
 
@@ -368,6 +372,7 @@ class RAGManager:
           nomic_score   — cosine similarity score when rerank_mode="nomic"
           reranker_score — cross-encoder score when rerank_mode="cross_encoder"
         """
+        top_k = top_k if top_k is not None else self.top_k
         count = self.collection.count()
         if count == 0:
             return []
@@ -383,7 +388,7 @@ class RAGManager:
             ranked = self._rerank_nomic(query_text, merged, top_k)
         return self._apply_bm25_floor(ranked, merged, self.bm25_floor, top_k)
 
-    def query_docs_multi(self, queries: List[str], top_k: int = 3, distance_threshold: float = 0.7) -> List[Dict]:
+    def query_docs_multi(self, queries: List[str], top_k: int = None, distance_threshold: float = 0.7) -> List[Dict]:
         """
         Multi-query hybrid retrieval: for each query run vector + BM25, RRF-merge per query,
         then deduplicate across queries and optionally rerank the final pool.
@@ -396,6 +401,7 @@ class RAGManager:
             return []
         n_candidates = min(15, count)
 
+        top_k = top_k if top_k is not None else self.top_k
         seen_ids: set = set()
         merged: List[Dict] = []
         for query in queries:
