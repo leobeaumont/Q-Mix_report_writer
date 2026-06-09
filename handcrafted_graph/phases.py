@@ -166,7 +166,7 @@ DRAFTING_PHASE = PhaseConfig(
         "DataAnalyst structures the evidence for it; Researcher fills any gaps; "
         "Collector writes and appends the polished section to the report."
     ),
-    max_rounds=10,
+    max_rounds=20,  # estimate only; patched at runtime to 2 × len(planned_sections)
     next_phase=PhaseType.SECTION_REVIEW,
     round_topologies=[
         # Round A: LeadArchitect designates the section, Researcher fetches fresh RAG

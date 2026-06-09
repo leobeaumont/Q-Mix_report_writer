@@ -54,7 +54,9 @@ class ReportState(Singleton):
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
         self.deficient_topics: List[str] = []  # topics absent from the knowledge base
-        self.review_section_idx: int = 0  # current section index during SECTION_REVIEW
+        self.planned_sections: List[str] = []   # ordered section titles from PLANNING
+        self.drafting_section_idx: int = 0      # current section index during DRAFTING
+        self.review_section_idx: int = 0        # current section index during SECTION_REVIEW
         # VALIDATION sliding-window state
         self.validation_window: Optional[tuple] = None  # (window_idx, n_windows, [section_dicts])
         self.validation_notes: List[str] = []           # per-window Reviewer outputs
@@ -73,6 +75,8 @@ class ReportState(Singleton):
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
         self.deficient_topics = []
+        self.planned_sections = []
+        self.drafting_section_idx = 0
         self.review_section_idx = 0
         self.validation_window = None
         self.validation_notes = []

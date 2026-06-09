@@ -175,6 +175,29 @@ class HandcraftedGraph:
                 self.phase_state.set_phase(phase.name)
                 logger.info(f"[{self.id}] Starting phase: {phase.name.value.upper()}")
                 await self._execute_phase(input, phase, max_tries, max_time, writing_pbar)
+
+                # After PLANNING: parse the section outline from the LA's last response
+                # and store it in ReportState before RESEARCH buries the context.
+                # Also patch writing_pbar.total so the bar reflects actual DRAFTING rounds.
+                if phase.name == PhaseType.PLANNING:
+                    la_node = self._get_node_by_name("LeadArchitect")
+                    la_last = (
+                        str(la_node.last_memory["outputs"][-1] or "")
+                        if la_node and la_node.last_memory.get("outputs") else ""
+                    )
+                    planned = self._parse_section_titles(la_last)
+                    ReportState.instance().planned_sections = planned
+                    logger.info(
+                        f"[{self.id}] Extracted {len(planned)} planned section(s) from PLANNING."
+                    )
+                    if planned:
+                        drafting_phase = next(
+                            (p for p in writing_phases if p.name == PhaseType.DRAFTING), None
+                        )
+                        if drafting_phase:
+                            delta = 2 * len(planned) - drafting_phase.max_rounds
+                            writing_pbar.total += delta
+                            writing_pbar.refresh()
         finally:
             writing_pbar.close()
 
@@ -338,6 +361,12 @@ class HandcraftedGraph:
             llm=self._get_any_llm(),
         )
 
+        if phase.name == PhaseType.DRAFTING:
+            await self._execute_drafting_phase(
+                input, phase, scheduler, max_tries, max_time, overall_pbar
+            )
+            return
+
         if phase.section_aware:
             await self._execute_section_aware_phase(
                 input, phase, scheduler, max_tries, max_time, overall_pbar
@@ -408,15 +437,132 @@ class HandcraftedGraph:
                             overall_pbar.update(phase.max_rounds - round_idx - 1)
                         break
 
-            if ReportState.instance().task == "[DRAFTING_COMPLETE]":
-                logger.info(
-                    f"Phase '{phase.name.value}' completed early at round {round_idx}: "
-                    f"[DRAFTING_COMPLETE] signal received."
+    # ------------------------------------------------------------------
+    # Drafting phase execution (code-driven section iteration)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_section_titles(text: str) -> List[str]:
+        """Extract ordered section titles from a numbered outline.
+
+        Tries bold format first (1. **Title**), then plain numbered list.
+        """
+        titles = re.findall(r'^\d+[.)]\s+\*\*(.+?)\*\*', text, re.MULTILINE)
+        if titles:
+            return [t.strip() for t in titles]
+        titles = re.findall(r'^\d+[.)]\s+(.+?)$', text, re.MULTILINE)
+        return [t.strip().rstrip('.,;:') for t in titles if t.strip()]
+
+    async def _execute_drafting_phase(
+        self,
+        input: Dict[str, str],
+        phase: PhaseConfig,
+        scheduler: RoundScheduler,
+        max_tries: int,
+        max_time: int,
+        overall_pbar: Optional[tqdm] = None,
+    ) -> None:
+        """Execute DRAFTING by iterating ReportState.planned_sections in order.
+
+        For each planned section:
+          - Sets report_state.task to the section title so all agents know the target.
+          - Round A (index 0): LeadArchitect formulates the task; Researcher + DataAnalyst
+            prepare evidence.
+          - Round B (index 1): DataAnalyst + Collector write the section.
+        Memory is cleared between sections to prevent cross-section contamination.
+        Exits naturally when all planned sections have been attempted.
+        Falls back to the generic round loop if no planned sections were extracted.
+        """
+        report_state = ReportState.instance()
+        planned = report_state.planned_sections
+
+        if not planned:
+            logger.warning(
+                f"[{self.id}] DRAFTING: no planned sections found — "
+                f"falling back to generic round loop."
+            )
+            n_patterns = len(phase.round_topologies)
+            for round_idx in range(phase.max_rounds):
+                topology = phase.round_topologies[round_idx % n_patterns]
+                active_agents = await scheduler.get_active_agents(
+                    topology, round_idx, task_input=input
                 )
+                if not active_agents:
+                    break
+                self._build_topology(topology, active_agents)
+                self._connect_temporal()
+                if self.execution_trace is not None:
+                    self._init_trace_round()
+                    self._trace_spatial_edges()
+                await self._execute_round(input, active_agents, max_tries, max_time)
+                self._update_memory()
+                self._clear_spatial()
+                self.phase_state.increment_round()
                 if overall_pbar is not None:
-                    overall_pbar.update(phase.max_rounds - round_idx - 1)
-                ReportState.instance().task = "[WAITING FOR NEXT PHASE DIRECTIVE]"
-                break
+                    overall_pbar.update(1)
+            return
+
+        n_sections = len(planned)
+        prep_topology  = phase.round_topologies[0]   # Round A: LA + Researcher + DA
+        write_topology = phase.round_topologies[1]   # Round B: DA + Collector
+
+        for i, section_title in enumerate(planned):
+            report_state.drafting_section_idx = i
+            report_state.task = f"[NEXT SECTION TO WRITE: {section_title}]"
+            self._clear_all_memory()
+
+            # ---- Round A: prep -------------------------------------------
+            if overall_pbar is not None:
+                overall_pbar.set_description(
+                    f"[DRAFTING] section {i + 1}/{n_sections} — prep"
+                )
+            active_agents = await scheduler.get_active_agents(
+                prep_topology, 0, task_input=input
+            )
+            logger.info(
+                f"  [drafting] Section {i + 1}/{n_sections} prep: "
+                f"active={sorted(active_agents)}"
+            )
+            self._build_topology(prep_topology, active_agents)
+            self._connect_temporal()
+            if self.execution_trace is not None:
+                self._init_trace_round()
+                self._trace_spatial_edges()
+            await self._execute_round(input, active_agents, max_tries, max_time)
+            self._update_memory()
+            self._clear_spatial()
+            self.phase_state.increment_round()
+            if overall_pbar is not None:
+                overall_pbar.update(1)
+
+            # ---- Round B: write ------------------------------------------
+            if overall_pbar is not None:
+                overall_pbar.set_description(
+                    f"[DRAFTING] section {i + 1}/{n_sections} — write"
+                )
+            active_agents = await scheduler.get_active_agents(
+                write_topology, 1, task_input=input
+            )
+            logger.info(
+                f"  [drafting] Section {i + 1}/{n_sections} write: "
+                f"active={sorted(active_agents)}"
+            )
+            self._build_topology(write_topology, active_agents)
+            self._connect_temporal()
+            if self.execution_trace is not None:
+                self._init_trace_round()
+                self._trace_spatial_edges()
+            await self._execute_round(input, active_agents, max_tries, max_time)
+            self._update_memory()
+            self._clear_spatial()
+            self.phase_state.increment_round()
+            if overall_pbar is not None:
+                overall_pbar.update(1)
+
+        logger.info(
+            f"[{self.id}] DRAFTING complete: {n_sections} section(s) attempted, "
+            f"{len(report_state.sections)} written."
+        )
 
     async def _execute_section_aware_phase(
         self,
