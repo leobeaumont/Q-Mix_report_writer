@@ -96,6 +96,11 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "ONLY plan sections for topics the Researcher explicitly confirmed are present "
         "in the knowledge base — do not invent sections around topics not mentioned. "
         "Each section entry must have a title and a one-sentence scope statement. "
+        "TARGET SECTION COUNT: aim for 6–8 sections. Never exceed 10. "
+        "If the knowledge base covers many sub-topics, merge related ones into broader "
+        "sections rather than splitting them. Prefer depth over breadth — a focused "
+        "8-section report is better than a shallow 15-section one. "
+        "If the knowledge base covers very few topics, plan as few as 1–3 sections. "
         "CRITICAL: If the Researcher returned `[RESEARCH_EXHAUSTED]` or provided no "
         "confirmed topics, you have NO evidence — do NOT produce a section list. "
         "Output only: `[AWAITING_COVERAGE_DATA]` and nothing else. "
@@ -213,6 +218,8 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "Prepare corrected content for the section currently under review. "
         "Output a structured Markdown list containing ONLY claims directly "
         "supported by RAG evidence — omit anything the Reviewer flagged as unverifiable. "
+        "If the Reviewer's instruction is to remove this section entirely, "
+        "output only `[REMOVE_SECTION]` and nothing else. "
         "If no RAG evidence supports any claim, output `[NO SUPPORTED CONTENT]` and nothing else."
     ),
     (PhaseType.SECTION_REVIEW, "Researcher"): (
@@ -226,8 +233,12 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "Rewrite the section shown under '### Current Section' in full, starting with "
         "its Markdown heading, using DataAnalyst's corrected content as your source. "
         "Do NOT append a new section — produce a complete replacement of the shown text. "
+        "If DataAnalyst's output is `[REMOVE_SECTION]`, output only `[REMOVE_SECTION]` "
+        "and nothing else — the pipeline will delete the section. "
         "If DataAnalyst's output is `[NO SUPPORTED CONTENT]`, output nothing — "
         "leave the section unchanged rather than adding meta-commentary. "
+        "NEVER output `[NO_REVISION_NEEDED]` — that signal belongs to the Reviewer only. "
+        "Always produce either full section prose, `[REMOVE_SECTION]`, or nothing. "
         "Do NOT write any sentence that references 'the next section', 'the following "
         "section', 'the subsequent section', or previews future content. "
         "CRITICAL: Do NOT write about the retrieval process, the RAG system, the absence "
@@ -263,10 +274,12 @@ PHASE_ROLE_OBJECTIVES: dict[tuple[PhaseType, str], str] = {
         "conclusion (2-4 sentences). Summarise the overall report quality.\n"
         "Apply a HIGH threshold for failure — output `[VALIDATION_FAILED]` ONLY if the "
         "Reviewer identified at least one serious problem: a factual contradiction between "
-        "sections, significant near-verbatim content duplication, or a transition so "
-        "incomprehensible that it genuinely impairs understanding. "
-        "Imperfect phrasing, absent bridging sentences, and minor stylistic issues are NOT "
-        "failure criteria.\n"
+        "sections (same quantity, incompatible numbers) or a transition so incomprehensible "
+        "that it genuinely impairs understanding. "
+        "Imperfect phrasing, absent bridging sentences, shared technical vocabulary, repeated "
+        "parameter values, and similar conclusions phrased differently are NOT failure criteria.\n"
+        "If 'RE-VALIDATION MODE' is shown in context: follow its decision rule exactly — "
+        "check only the listed prior issues and ignore anything else the Reviewer may have noted.\n"
         "End your response with EXACTLY one of these two tokens on its own line:\n"
         "  `[VALIDATION_PASSED]` — no serious cross-section issues remain.\n"
         "  `[VALIDATION_FAILED]` — at least one serious issue requires correction."
@@ -329,17 +342,28 @@ class HandcraftedPromptSet(PromptSet):
                 current_id = sections[idx]["id"]
                 section_instruction = _extract_section_directive(directive, current_id)
                 if section_instruction:
-                    block += (
-                        f"\n**REVISION DIRECTIVE for `{current_id}` — this is your ONLY task:**\n"
-                        f"{section_instruction}\n\n"
-                        f"**STRICT SCOPE:** Do NOT fact-check any other claims in this section. "
-                        f"Do NOT flag issues not listed in the directive above. "
-                        f"Do NOT introduce new corrections — the directive is the complete and "
-                        f"authoritative list of what must change. "
-                        f"Check ONLY whether the directive has been applied: if not yet applied, "
-                        f"output the remaining items as numbered corrections; "
-                        f"if fully applied, output [NO_REVISION_NEEDED] and nothing else.\n"
-                    )
+                    if role == "Collector":
+                        # Directive-bypass mode: Collector applies the change directly.
+                        # Give it writer instructions, not reviewer audit instructions.
+                        block += (
+                            f"\n**REVISION DIRECTIVE for `{current_id}` — apply this change:**\n"
+                            f"{section_instruction}\n\n"
+                            f"Output the fully revised section with the directive applied. "
+                            f"If the directive instructs you to remove or delete this section entirely, "
+                            f"output exactly `[REMOVE_SECTION]` and nothing else.\n"
+                        )
+                    else:
+                        block += (
+                            f"\n**REVISION DIRECTIVE for `{current_id}` — this is your ONLY task:**\n"
+                            f"{section_instruction}\n\n"
+                            f"**STRICT SCOPE:** Do NOT fact-check any other claims in this section. "
+                            f"Do NOT flag issues not listed in the directive above. "
+                            f"Do NOT introduce new corrections — the directive is the complete and "
+                            f"authoritative list of what must change. "
+                            f"Check ONLY whether the directive has been applied: if not yet applied, "
+                            f"output the remaining items as numbered corrections; "
+                            f"if fully applied, output [NO_REVISION_NEEDED] and nothing else.\n"
+                        )
                 else:
                     block += (
                         f"\n**Validation note:** `{current_id}` was NOT flagged for any changes "
@@ -370,6 +394,18 @@ class HandcraftedPromptSet(PromptSet):
                     for j, note in enumerate(notes):
                         excerpt = note[:800] + ("…" if len(note) > 800 else "")
                         block += f"\n--- Window {j + 1} ---\n{excerpt}\n"
+                # If this is a re-validation pass, scope the LA to compliance-only
+                prior_issues = report_state.validation_issues
+                if prior_issues:
+                    block += (
+                        f"\n**RE-VALIDATION MODE — compliance check only.**\n"
+                        f"The following issues were identified in the previous validation pass. "
+                        f"Your ONLY task is to verify whether each of these issues has been corrected:\n"
+                        f"{prior_issues[:1200]}\n\n"
+                        f"Decision rule: if ALL listed issues are resolved → `[VALIDATION_PASSED]`. "
+                        f"If at least one listed issue is still present → `[VALIDATION_FAILED]`. "
+                        f"Do NOT introduce new failure criteria. Do NOT fail on issues not listed above.\n"
+                    )
 
         return block
 

@@ -66,6 +66,7 @@ class ReportState(Singleton):
         self.citation_counts: Dict[int, int] = {}       # bib number → times cited in text
         # Validation loop state
         self.validation_directive: str = ""             # per-section actions from failed validation
+        self.validation_issues: str = ""                # raw issues from failed validation (used to scope re-check)
 
     def reset(self):
         self.content = ""
@@ -84,6 +85,7 @@ class ReportState(Singleton):
         self.bibliography_map = {}
         self.citation_counts = {}
         self.validation_directive = ""
+        self.validation_issues = ""
 
     def add_deficiency(self, topic: str) -> None:
         """Record a topic the Researcher confirmed is absent from the knowledge base."""
@@ -103,6 +105,18 @@ class ReportState(Singleton):
         if new_sources is not None:
             self.sources += new_sources
         return section_id
+
+    def remove_section(self, section_id: str) -> bool:
+        """Remove a section by ID. Rebuilds self.content after removal.
+
+        Returns False if section_id is not found.
+        """
+        for i, section in enumerate(self.sections):
+            if section["id"] == section_id:
+                self.sections.pop(i)
+                self.content = "\n\n".join(s["content"] for s in self.sections)
+                return True
+        return False
 
     def replace_section(self, section_id: str, new_content: str, new_sources: Optional[List] = None) -> bool:
         """Replace an existing section's content in-place.

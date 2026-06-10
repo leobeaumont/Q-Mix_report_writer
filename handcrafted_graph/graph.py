@@ -29,6 +29,7 @@ from graph.node import Node
 from handcrafted_graph.phases import PhaseConfig, PhaseType, RoundTopology, PHASE_SEQUENCE
 from handcrafted_graph.scheduler import RoundScheduler, SkipStrategy
 from handcrafted_graph.state import PhaseState
+from handcrafted_graph.prompts.handcrafted_prompt_set import _extract_section_directive
 from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace, SourceBuffer
 
 logger = logging.getLogger("handcrafted_graph")
@@ -181,10 +182,16 @@ class HandcraftedGraph:
                 # Also patch writing_pbar.total so the bar reflects actual DRAFTING rounds.
                 if phase.name == PhaseType.PLANNING:
                     la_node = self._get_node_by_name("LeadArchitect")
-                    la_last = (
-                        str(la_node.last_memory["outputs"][-1] or "")
-                        if la_node and la_node.last_memory.get("outputs") else ""
-                    )
+                    # The outline is produced in the first PLANNING round; later rounds
+                    # may output directives or signals. Scan all outputs and use the
+                    # first one that looks like a numbered list.
+                    la_outputs = la_node.last_memory.get("outputs", []) if la_node else []
+                    la_last = ""
+                    for out in reversed(la_outputs):
+                        text = str(out or "").strip()
+                        if re.search(r'^\d+[.)]\s+', text, re.MULTILINE):
+                            la_last = text
+                            break
                     planned = self._parse_section_titles(la_last)
                     ReportState.instance().planned_sections = planned
                     logger.info(
@@ -302,6 +309,7 @@ class HandcraftedGraph:
                 if rv_node and rv_node.outputs else ""
             )
             combined_issues = f"{reviewer_synthesis}\n\n{la_output}".strip()
+            report_state.validation_issues = combined_issues  # used to scope the next validation pass
 
             tqdm.write(
                 f"\n  Validation failed (attempt {attempt + 1}/{max_validation_attempts + 1})."
@@ -597,6 +605,63 @@ class HandcraftedGraph:
         revision_topology = phase.round_topologies[1]
 
         for i, section in enumerate(sections):
+            directive = report_state.validation_directive
+            if directive:
+                section_instruction = _extract_section_directive(directive, section["id"])
+                if not section_instruction:
+                    # No directive for this section — skip both rounds in code.
+                    # Relying on the Reviewer to self-police via a prompt instruction
+                    # is unreliable — it fact-checks anyway and wastes LLM calls.
+                    logger.info(
+                        f"  [{phase.name.value}] Section {i + 1}/{n_sections} ({section['id']}): "
+                        f"no revision directive — skipping."
+                    )
+                    if overall_pbar is not None:
+                        overall_pbar.update(2)
+                    continue
+
+                # Directive exists for this section — bypass Reviewer and DataAnalyst.
+                # Give the directive directly to the Collector so the Reviewer cannot
+                # override it with its own fact-checking or re-derive the correction.
+                report_state.review_section_idx = i
+                self._clear_all_memory()
+
+                if overall_pbar is not None:
+                    overall_pbar.set_description(
+                        f"[{phase.name.value.upper()}] section {i + 1}/{n_sections} — directive apply"
+                    )
+                    overall_pbar.update(1)  # account for skipped review round
+
+                # _execute_round filters by node.agent_name, so active_agents must
+                # contain the role name string — NOT the node UUID.
+                directive_agents = {"Collector"}
+                logger.info(
+                    f"  [{phase.name.value}] Section {i + 1}/{n_sections} directive apply: "
+                    f"active={sorted(directive_agents)}"
+                )
+
+                self._build_topology(revision_topology, directive_agents)
+                self._connect_temporal()
+
+                if self.execution_trace is not None:
+                    self._init_trace_round()
+                    self._trace_spatial_edges()
+
+                await self._execute_round(input, directive_agents, max_tries, max_time)
+                self._update_memory()
+                self._clear_spatial()
+                self.phase_state.increment_round()
+
+                if overall_pbar is not None:
+                    overall_pbar.update(1)
+
+                self._apply_citation_tags(i)
+                if self.execution_trace is not None:
+                    self.execution_trace.trace[-1]["Collector"]["report_state"] = (
+                        ReportState.instance().content
+                    )
+                continue
+
             report_state.review_section_idx = i
             self._clear_all_memory()  # clean slate for this section
 

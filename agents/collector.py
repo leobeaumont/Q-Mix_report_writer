@@ -102,8 +102,11 @@ class Collector(Node):
         return ""
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
-        if not spatial_info:  # If no agent appended, the collector stays idle
-            return
+        if not spatial_info:
+            # Allow execution in directive-driven SECTION_REVIEW — the REVISION DIRECTIVE
+            # is already in the context block; no Reviewer/DataAnalyst input is needed.
+            if not (self._is_revision_phase() and self.report.validation_directive):
+                return
         if not self._data_analyst_has_content(spatial_info):
             if not self._is_revision_phase():
                 self.report.task = "[SECTION_SKIPPED — ASSIGN NEXT SECTION]"
@@ -128,9 +131,20 @@ class Collector(Node):
             # Section targeting is always resolved by the pipeline (review_section_idx),
             # never by parsing LLM output — this eliminates wrong-section replacements.
             section_id = self._extract_section_id_from_review_index()
+            clean = response1.strip()
             if not section_id:
                 logger.error(
                     "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
+                )
+            elif clean == "[REMOVE_SECTION]":
+                if self.report.remove_section(section_id):
+                    logger.info(f"SECTION_REVIEW: section '{section_id}' removed per directive.")
+                else:
+                    logger.error(f"SECTION_REVIEW: section '{section_id}' not found — removal skipped.")
+            elif clean in ("[NO_REVISION_NEEDED]", "[HOLD]", "[NO SUPPORTED CONTENT]", "[NO_SUPPORTED_CONTENT]"):
+                # Collector echoed a sentinel instead of writing prose — leave section unchanged.
+                logger.warning(
+                    f"SECTION_REVIEW: Collector output sentinel '{clean}' instead of prose — section unchanged."
                 )
             elif self.report.replace_section(section_id, response1, new_sources):
                 self.report.progress = response2
@@ -146,8 +160,11 @@ class Collector(Node):
         return response1
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
-        if not spatial_info:  # If no agent appended, the collector stays idle
-            return
+        if not spatial_info:
+            # Allow execution in directive-driven SECTION_REVIEW — the REVISION DIRECTIVE
+            # is already in the context block; no Reviewer/DataAnalyst input is needed.
+            if not (self._is_revision_phase() and self.report.validation_directive):
+                return
         if not self._data_analyst_has_content(spatial_info):
             if not self._is_revision_phase():
                 self.report.task = "[SECTION_SKIPPED — ASSIGN NEXT SECTION]"
@@ -169,12 +186,20 @@ class Collector(Node):
 
         new_sources = self.source_buffer.flush()
         if self._is_revision_phase():
-            # Section targeting is always resolved by the pipeline (review_section_idx),
-            # never by parsing LLM output — this eliminates wrong-section replacements.
             section_id = self._extract_section_id_from_review_index()
+            clean = response1.strip()
             if not section_id:
                 logger.error(
                     "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
+                )
+            elif clean == "[REMOVE_SECTION]":
+                if self.report.remove_section(section_id):
+                    logger.info(f"SECTION_REVIEW: section '{section_id}' removed per directive.")
+                else:
+                    logger.error(f"SECTION_REVIEW: section '{section_id}' not found — removal skipped.")
+            elif clean in ("[NO_REVISION_NEEDED]", "[HOLD]", "[NO SUPPORTED CONTENT]", "[NO_SUPPORTED_CONTENT]"):
+                logger.warning(
+                    f"SECTION_REVIEW: Collector output sentinel '{clean}' instead of prose — section unchanged."
                 )
             elif self.report.replace_section(section_id, response1, new_sources):
                 self.report.progress = response2
