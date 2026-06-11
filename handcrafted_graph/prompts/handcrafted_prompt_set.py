@@ -300,9 +300,26 @@ class HandcraftedPromptSet(PromptSet):
         return PhaseState.instance().current_phase
 
     def get_description(self, role: str) -> str:
+        from utils.globals import ReportState
         base = ROLE_DESCRIPTION.get(role, "")
         phase = self._current_phase()
-        phase_block = PHASE_CONTEXT.get(phase, "")
+
+        # In re-validation mode the Reviewer is not a general auditor — replace the
+        # VALIDATION phase context with a narrower RE-VALIDATION description so the
+        # base system prompt does not prime it to hunt for new problems.
+        if (phase == PhaseType.VALIDATION
+                and role == "Reviewer"
+                and ReportState.instance().validation_issues):
+            phase_block = (
+                "### Pipeline Phase: RE-VALIDATION\n"
+                "The previous validation pass identified specific issues. "
+                "Your role here is purely confirmatory: you are NOT asked to find new problems. "
+                "You will be shown the exact issues that were flagged in the prior pass. "
+                "Your sole task is to determine whether each of those issues has been "
+                "corrected in the current text."
+            )
+        else:
+            phase_block = PHASE_CONTEXT.get(phase, "")
 
         extra = f"\n\n{phase_block}" if phase_block else ""
         return base + extra
@@ -314,6 +331,28 @@ class HandcraftedPromptSet(PromptSet):
         phase = state.current_phase
         round_n = state.round_in_phase
         objective = PHASE_ROLE_OBJECTIVES.get((phase, role), "")
+
+        # In re-validation mode, replace the general VALIDATION objectives for Reviewer
+        # and LeadArchitect so the model's primary instruction is compliance-checking,
+        # not quality auditing.
+        if phase == PhaseType.VALIDATION:
+            from utils.globals import ReportState
+            _prior = ReportState.instance().validation_issues
+            if _prior:
+                if role == "Reviewer":
+                    objective = (
+                        "You are in RE-VALIDATION MODE. Do NOT perform a general quality audit. "
+                        "You will be shown the exact issues flagged in the previous validation pass. "
+                        "For each issue relevant to the sections in your current window, state "
+                        "RESOLVED or STILL PRESENT. Report nothing else."
+                    )
+                elif role == "Lead Architect":
+                    objective = (
+                        "You are in RE-VALIDATION MODE. Do NOT summarise overall report quality. "
+                        "Your only task: using the Reviewer's compliance notes and the RE-VALIDATION "
+                        "checklist below, decide whether every listed issue is now resolved. "
+                        "Apply the decision rule exactly — ignore anything outside the checklist."
+                    )
 
         block = "### Current Pipeline Context\n"
         block += f"**Phase:** {phase.value.upper()} | **Round:** {round_n}\n"
@@ -348,7 +387,10 @@ class HandcraftedPromptSet(PromptSet):
                         block += (
                             f"\n**REVISION DIRECTIVE for `{current_id}` — apply this change:**\n"
                             f"{section_instruction}\n\n"
-                            f"Output the fully revised section with the directive applied. "
+                            f"Make ONLY the change described above. Do NOT rewrite the section from "
+                            f"scratch — read the existing section content and apply the minimal edit "
+                            f"required. Then output the complete revised section starting with its "
+                            f"Markdown heading.\n"
                             f"If the directive instructs you to remove or delete this section entirely, "
                             f"output exactly `[REMOVE_SECTION]` and nothing else.\n"
                         )
@@ -375,6 +417,7 @@ class HandcraftedPromptSet(PromptSet):
             from utils.globals import ReportState
             report_state = ReportState.instance()
             window_info = report_state.validation_window
+            prior_issues = report_state.validation_issues
             if window_info is not None:
                 # Window review: show scope so agents don't flag out-of-window content
                 i, n_windows, window_sections = window_info
@@ -384,6 +427,21 @@ class HandcraftedPromptSet(PromptSet):
                     f"reviewing: {ids}. "
                     f"All other sections are outside this window — do not reference them.\n"
                 )
+                # In re-validation mode, give the Reviewer only the prior checklist.
+                # It must not flag anything new — only report resolved / still-present.
+                if prior_issues and role == "Reviewer":
+                    current_ids = ", ".join(s["id"] for s in report_state.sections)
+                    block += (
+                        f"\n**RE-VALIDATION CHECKLIST — prior issues to verify:**\n"
+                        f"**Sections still in the report:** {current_ids}\n"
+                        f"(Any section not in this list has been removed as part of the fix.)\n\n"
+                        f"{prior_issues[:1200]}\n\n"
+                        f"For each issue above that involves the sections in this window ({ids}), "
+                        f"state RESOLVED or STILL PRESENT. "
+                        f"If an issue references a section that has been removed from the report, "
+                        f"mark it as RESOLVED. "
+                        f"Do NOT flag any new issues. Do NOT comment on anything not in this list.\n"
+                    )
             else:
                 # Synthesis: provide section list + all accumulated window notes
                 block += f"\n**Full report structure:**\n"
@@ -394,17 +452,21 @@ class HandcraftedPromptSet(PromptSet):
                     for j, note in enumerate(notes):
                         excerpt = note[:800] + ("…" if len(note) > 800 else "")
                         block += f"\n--- Window {j + 1} ---\n{excerpt}\n"
-                # If this is a re-validation pass, scope the LA to compliance-only
-                prior_issues = report_state.validation_issues
+                # Re-validation synthesis: the LA decides solely from the prior checklist.
                 if prior_issues:
                     block += (
                         f"\n**RE-VALIDATION MODE — compliance check only.**\n"
-                        f"The following issues were identified in the previous validation pass. "
-                        f"Your ONLY task is to verify whether each of these issues has been corrected:\n"
+                        f"The following issues were identified in the previous validation pass:\n"
                         f"{prior_issues[:1200]}\n\n"
-                        f"Decision rule: if ALL listed issues are resolved → `[VALIDATION_PASSED]`. "
-                        f"If at least one listed issue is still present → `[VALIDATION_FAILED]`. "
-                        f"Do NOT introduce new failure criteria. Do NOT fail on issues not listed above.\n"
+                        f"Decision rule:\n"
+                        f"  → If ALL listed issues are resolved: output `[VALIDATION_PASSED]`.\n"
+                        f"  → If at least one listed issue is still present: output `[VALIDATION_FAILED]`.\n"
+                        f"Do NOT introduce new failure criteria. "
+                        f"Do NOT fail on anything not in the list above. "
+                        f"The window notes above reflect compliance checks only — "
+                        f"any new findings in those notes must be ignored.\n"
+                        f"Output ONLY the verdict sentinel on its own line — "
+                        f"no directive, no task, no explanation.\n"
                     )
 
         return block

@@ -142,6 +142,16 @@ class Researcher(Node):
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         raw_queries = self.llm.gen(message)
         queries = _parse_queries(raw_queries) if raw_queries and not raw_queries.strip().startswith("[") else []
+        # PLANNING coverage scan must not be skipped. The Researcher runs before the
+        # LeadArchitect with no directive yet, so the query-formulation LLM sometimes
+        # returns nothing usable. Without a fallback the coverage scan yields
+        # [RESEARCH_EXHAUSTED], the LA emits [AWAITING_COVERAGE_DATA], and PLANNING
+        # produces no outline (triggering the generic drafting fallback). Use the
+        # report subject as a broad topic-discovery query so the outline gets evidence.
+        if not queries and self._is_planning_phase():
+            subject = str((input or {}).get("task", "")).strip()
+            if subject and not subject.startswith("["):
+                queries = [subject]
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["prompt"] = queries
         if not queries:
@@ -229,6 +239,16 @@ class Researcher(Node):
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         raw_queries = await self.llm.agen(message)
         queries = _parse_queries(raw_queries) if raw_queries and not raw_queries.strip().startswith("[") else []
+        # PLANNING coverage scan must not be skipped. The Researcher runs before the
+        # LeadArchitect with no directive yet, so the query-formulation LLM sometimes
+        # returns nothing usable. Without a fallback the coverage scan yields
+        # [RESEARCH_EXHAUSTED], the LA emits [AWAITING_COVERAGE_DATA], and PLANNING
+        # produces no outline (triggering the generic drafting fallback). Use the
+        # report subject as a broad topic-discovery query so the outline gets evidence.
+        if not queries and self._is_planning_phase():
+            subject = str((input or {}).get("task", "")).strip()
+            if subject and not subject.startswith("["):
+                queries = [subject]
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["prompt"] = queries
         if not queries:

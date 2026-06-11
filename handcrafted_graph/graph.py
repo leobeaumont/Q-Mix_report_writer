@@ -492,6 +492,13 @@ class HandcraftedGraph:
             n_patterns = len(phase.round_topologies)
             for round_idx in range(phase.max_rounds):
                 topology = phase.round_topologies[round_idx % n_patterns]
+                # Refresh the bar label: without this the bar keeps the previous
+                # phase's description (e.g. "[RESEARCH] round 6/6") for the whole
+                # generic-fallback draft instead of showing DRAFTING progress.
+                if overall_pbar is not None:
+                    overall_pbar.set_description(
+                        f"[{phase.name.value.upper()}] round {round_idx + 1}/{phase.max_rounds}"
+                    )
                 active_agents = await scheduler.get_active_agents(
                     topology, round_idx, task_input=input
                 )
