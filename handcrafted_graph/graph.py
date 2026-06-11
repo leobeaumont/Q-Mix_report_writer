@@ -38,6 +38,13 @@ logger = logging.getLogger("handcrafted_graph")
 # Citation tagging — sentence-level n-gram overlap constants
 # ------------------------------------------------------------------
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])(\s+)(?=[A-Z"\'])')
+# Matches an explicit removal instruction in a Reviewer critique. Used to
+# authorize [REMOVE_SECTION] — the Collector refuses the sentinel otherwise.
+_REMOVAL_REQUEST_RE = re.compile(
+    r'\b(?:remove|delete|drop|removal|deletion)\b[^.\n]{0,80}\bsection\b'
+    r'|\bsection\b[^.\n]{0,80}\b(?:removed?|deleted?|dropped|removal|deletion)\b',
+    re.IGNORECASE,
+)
 _TOKEN_RE          = re.compile(r'[a-zA-Z0-9]+')
 _MIN_TOKEN_LEN        = 5   # minimum token length to be considered meaningful
 _MIN_CITATION_OVERLAP = 5   # shared tokens required to assign a citation
@@ -77,7 +84,7 @@ class HandcraftedGraph:
         self,
         llm_name: str,
         agent_names: List[str],
-        skip_strategy: SkipStrategy = SkipStrategy.TEMPORAL_HEURISTIC,
+        skip_strategy: SkipStrategy = SkipStrategy.ALWAYS_INCLUDE,
         execution_trace: bool = False,
         phases: Optional[List[PhaseConfig]] = None,
     ) -> None:
@@ -601,8 +608,12 @@ class HandcraftedGraph:
         temporal self-edge carries the critique into the revision round.
         """
         report_state = ReportState.instance()
-        sections = report_state.sections
-        n_sections = len(sections)
+        # Iterate over a snapshot: a [REMOVE_SECTION] revision mutates the live
+        # sections list mid-loop, which would shift positions and silently skip
+        # the section that follows the removed one. The positional index is
+        # re-resolved by ID at every iteration for the same reason.
+        sections_snapshot = list(report_state.sections)
+        n_sections = len(sections_snapshot)
 
         if n_sections == 0:
             logger.warning(f"Phase '{phase.name.value}': no sections to review — skipping.")
@@ -611,7 +622,20 @@ class HandcraftedGraph:
         review_topology = phase.round_topologies[0]
         revision_topology = phase.round_topologies[1]
 
-        for i, section in enumerate(sections):
+        for i, section in enumerate(sections_snapshot):
+            idx = next(
+                (j for j, s in enumerate(report_state.sections) if s["id"] == section["id"]),
+                None,
+            )
+            if idx is None:
+                logger.warning(
+                    f"  [{phase.name.value}] Section {i + 1}/{n_sections} ({section['id']}): "
+                    f"no longer in the report — skipping."
+                )
+                if overall_pbar is not None:
+                    overall_pbar.update(2)
+                continue
+            report_state.removal_authorized = False
             directive = report_state.validation_directive
             if directive:
                 section_instruction = _extract_section_directive(directive, section["id"])
@@ -630,7 +654,7 @@ class HandcraftedGraph:
                 # Directive exists for this section — bypass Reviewer and DataAnalyst.
                 # Give the directive directly to the Collector so the Reviewer cannot
                 # override it with its own fact-checking or re-derive the correction.
-                report_state.review_section_idx = i
+                report_state.review_section_idx = idx
                 self._clear_all_memory()
 
                 if overall_pbar is not None:
@@ -662,14 +686,14 @@ class HandcraftedGraph:
                 if overall_pbar is not None:
                     overall_pbar.update(1)
 
-                self._apply_citation_tags(i)
+                self._apply_citation_tags(idx)
                 if self.execution_trace is not None:
                     self.execution_trace.trace[-1]["Collector"]["report_state"] = (
                         ReportState.instance().content
                     )
                 continue
 
-            report_state.review_section_idx = i
+            report_state.review_section_idx = idx
             self._clear_all_memory()  # clean slate for this section
 
             # ---- Round A: review ----------------------------------------
@@ -736,7 +760,7 @@ class HandcraftedGraph:
                 )
                 if overall_pbar is not None:
                     overall_pbar.update(1)  # account for skipped revision round
-                self._apply_citation_tags(i)
+                self._apply_citation_tags(idx)
                 if self.execution_trace is not None:
                     self.execution_trace.trace[-1]["Collector"]["report_state"] = (
                         ReportState.instance().content
@@ -749,6 +773,12 @@ class HandcraftedGraph:
                     f"[{phase.name.value.upper()}] section {i + 1}/{n_sections} — revision"
                 )
 
+            # Authorize destructive removal only when the critique explicitly
+            # asks for it — the Collector refuses [REMOVE_SECTION] otherwise.
+            report_state.removal_authorized = bool(
+                _REMOVAL_REQUEST_RE.search(reviewer_output)
+            )
+
             active_agents = await scheduler.get_active_agents(
                 revision_topology, 1, task_input=input
             )
@@ -758,6 +788,14 @@ class HandcraftedGraph:
             )
 
             self._build_topology(revision_topology, active_agents)
+            # Forward the stored critique from the review round: wire a one-way
+            # edge from the (inactive) Reviewer so get_spatial_info() delivers
+            # its existing output to DataAnalyst without re-executing the node.
+            # Re-running the Reviewer here would cost a full re-review and could
+            # produce a different critique than the one this revision is based on.
+            da_node = self._get_node_by_name("DataAnalyst")
+            if reviewer_node is not None and da_node is not None and reviewer_node.outputs:
+                reviewer_node.add_successor(da_node, "spatial")
             self._connect_temporal()
 
             if self.execution_trace is not None:
@@ -768,11 +806,12 @@ class HandcraftedGraph:
             self._update_memory()
             self._clear_spatial()
             self.phase_state.increment_round()
+            report_state.removal_authorized = False
 
             if overall_pbar is not None:
                 overall_pbar.update(1)
 
-            self._apply_citation_tags(i)
+            self._apply_citation_tags(idx)
             if self.execution_trace is not None:
                 self.execution_trace.trace[-1]["Collector"]["report_state"] = (
                     ReportState.instance().content
@@ -816,6 +855,11 @@ class HandcraftedGraph:
                 total += section_len
                 j += 1
             windows.append(window)
+            # Stop once a window reaches the final section: the overlap advance
+            # would otherwise produce a trailing window containing only sections
+            # already covered (e.g. a redundant single-section window).
+            if j >= len(sections):
+                break
             i += max(1, len(window) - overlap_sections)
         return windows
 

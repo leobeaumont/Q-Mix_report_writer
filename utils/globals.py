@@ -67,6 +67,10 @@ class ReportState(Singleton):
         # Validation loop state
         self.validation_directive: str = ""             # per-section actions from failed validation
         self.validation_issues: str = ""                # raw issues from failed validation (used to scope re-check)
+        # Set by the graph before a revision round when the Reviewer's critique
+        # explicitly asks for the section's removal. The Collector refuses
+        # [REMOVE_SECTION] unless this flag or validation_directive is set.
+        self.removal_authorized: bool = False
 
     def reset(self):
         self.content = ""
@@ -86,6 +90,7 @@ class ReportState(Singleton):
         self.citation_counts = {}
         self.validation_directive = ""
         self.validation_issues = ""
+        self.removal_authorized = False
 
     def add_deficiency(self, topic: str) -> None:
         """Record a topic the Researcher confirmed is absent from the knowledge base."""

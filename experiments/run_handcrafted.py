@@ -44,7 +44,7 @@ def main():
                         help="Save execution trace to handcrafted_trace.json.")
     parser.add_argument("--skip-strategy",
                         choices=[s.value for s in SkipStrategy],
-                        default=SkipStrategy.TEMPORAL_HEURISTIC.value,
+                        default=SkipStrategy.ALWAYS_INCLUDE.value,
                         help="Skip strategy for optional agents.")
     parser.add_argument("--max-tries", type=int, default=3,
                         help="Retry attempts per agent on LLM failure.")

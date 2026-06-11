@@ -51,6 +51,10 @@ class Researcher(Node):
         self.top_k_planning = int(rag_cfg.get("top_k_planning", 3))
         self.top_k_drafting = int(rag_cfg.get("top_k_drafting", 5))
         self.rag = RAGManager(rerank_mode=rerank_mode, bm25_floor=bm25_floor)
+        # Chunk ids already reported during RESEARCH. Consecutive research rounds
+        # tend to issue near-identical queries; without this filter the same
+        # chunks are re-retrieved and re-synthesised round after round.
+        self._reported_chunk_ids: set = set()
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
@@ -92,6 +96,33 @@ class Researcher(Node):
             return PhaseState.instance().current_phase == PhaseType.PLANNING
         except Exception:
             return False
+
+    def _is_research_phase(self) -> bool:
+        try:
+            from handcrafted_graph.state import PhaseState
+            from handcrafted_graph.phases import PhaseType
+            return PhaseState.instance().current_phase == PhaseType.RESEARCH
+        except Exception:
+            return False
+
+    # Returned (without an LLM call) when every retrieved chunk was already
+    # reported in an earlier RESEARCH round. Phrased as a State Deficiency so
+    # the LeadArchitect redirects the next query instead of ending the phase.
+    _DUPLICATE_RETRIEVAL_SIGNAL = (
+        "State Deficiency: all retrieved documents were already reported in earlier "
+        "research rounds. Redirect the next query to a different sub-topic."
+    )
+
+    def _filter_reported_chunks(self, documents: list) -> list:
+        """Drop chunks already reported in a previous RESEARCH round.
+
+        Applies only to RESEARCH — DRAFTING and SECTION_REVIEW legitimately
+        re-retrieve chunks because each section keeps its own source list for
+        fact-checking and citation tagging.
+        """
+        fresh = [d for d in documents if d.get("id") not in self._reported_chunk_ids]
+        self._reported_chunk_ids.update(d.get("id") for d in fresh)
+        return fresh
 
     def _persist_deficiencies(self, response: str) -> None:
         """Parse State Deficiency entries from a PLANNING coverage response and store them."""
@@ -161,6 +192,14 @@ class Researcher(Node):
                 execution_trace.trace[-1]["Researcher"]["response"] = signal
             return signal
         documents = self.rag.query_docs_multi(queries, top_k=self._current_top_k())
+        if documents and self._is_research_phase():
+            documents = self._filter_reported_chunks(documents)
+            if not documents:
+                signal = self._DUPLICATE_RETRIEVAL_SIGNAL
+                if execution_trace:
+                    execution_trace.trace[-1]["RAG"]["response"] = signal
+                    execution_trace.trace[-1]["Researcher"]["response"] = signal
+                return signal
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             execution_trace.trace[-1]["RAG"]["sources"] = [
@@ -258,6 +297,14 @@ class Researcher(Node):
                 execution_trace.trace[-1]["Researcher"]["response"] = signal
             return signal
         documents = self.rag.query_docs_multi(queries, top_k=self._current_top_k())
+        if documents and self._is_research_phase():
+            documents = self._filter_reported_chunks(documents)
+            if not documents:
+                signal = self._DUPLICATE_RETRIEVAL_SIGNAL
+                if execution_trace:
+                    execution_trace.trace[-1]["RAG"]["response"] = signal
+                    execution_trace.trace[-1]["Researcher"]["response"] = signal
+                return signal
         if execution_trace:
             execution_trace.trace[-1]["RAG"]["response"] = f"{documents}"
             execution_trace.trace[-1]["RAG"]["sources"] = [

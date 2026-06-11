@@ -1,3 +1,5 @@
+import logging
+
 import aiohttp
 from typing import List, Union, Optional, Dict
 
@@ -5,6 +7,22 @@ from .format import Message
 from .llm import LLM
 from utils.config import get_llm_config, get_config
 from utils.globals import PromptTokens, CompletionTokens
+
+logger = logging.getLogger("llm.ollama_chat")
+
+
+def _trim_truncated_tail(text: str) -> str:
+    """Cut a max_tokens-truncated completion back to its last complete sentence.
+
+    A response cut mid-sentence (e.g. a review ending in "(5)") confuses every
+    downstream consumer. Trimming to the last sentence boundary keeps the output
+    coherent. If no boundary exists in the second half of the text, it is
+    returned unchanged — losing half the content is worse than a ragged tail.
+    """
+    cut = max(text.rfind(ch) for ch in ".!?\n")
+    if cut >= len(text) // 2:
+        return text[: cut + 1].rstrip()
+    return text
 
 
 def _build_ollama_endpoint(base_url: str) -> str:
@@ -118,6 +136,19 @@ async def achat_ollama(
                     f"(finish_reason={finish_reason}, "
                     f"completion_tokens={completion_tokens})"
                 )
+
+            # Detect a hard cut at the max_tokens ceiling. The response is kept
+            # (a retry would hit the same cap) but trimmed to the last complete
+            # sentence so downstream agents never consume a mid-sentence tail.
+            # JSON-schema responses are left untouched — trimming breaks JSON.
+            if choice.get("finish_reason") == "length" and not response_schema:
+                logger.warning(
+                    f"Response truncated at max_tokens={max_tokens} "
+                    f"(agent={calling_agent or 'unknown'}, "
+                    f"completion_tokens={usage.get('completion_tokens', '?')}) — "
+                    f"trimming to the last complete sentence."
+                )
+                completion = _trim_truncated_tail(completion)
             return completion
 
 

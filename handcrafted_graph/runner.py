@@ -38,7 +38,7 @@ async def run_handcrafted(
     task: str,
     llm_name: Optional[str] = None,
     agent_names: Optional[List[str]] = None,
-    skip_strategy: SkipStrategy = SkipStrategy.TEMPORAL_HEURISTIC,
+    skip_strategy: SkipStrategy = SkipStrategy.ALWAYS_INCLUDE,
     execution_trace: bool = False,
     phases: Optional[List[PhaseConfig]] = None,
     max_tries: int = 3,
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip-strategy",
         choices=[s.value for s in SkipStrategy],
-        default=SkipStrategy.TEMPORAL_HEURISTIC.value,
+        default=SkipStrategy.ALWAYS_INCLUDE.value,
         help="Skip strategy for optional agents.",
     )
     parser.add_argument("--trace", action="store_true", help="Save execution trace.")

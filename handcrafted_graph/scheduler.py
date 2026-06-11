@@ -58,7 +58,7 @@ class RoundScheduler:
         self,
         nodes: Dict[str, Node],
         collector_id: Optional[str],
-        skip_strategy: SkipStrategy = SkipStrategy.TEMPORAL_HEURISTIC,
+        skip_strategy: SkipStrategy = SkipStrategy.ALWAYS_INCLUDE,
         llm=None,
     ) -> None:
         self.nodes = nodes

@@ -212,14 +212,15 @@ SECTION_REVIEW_PHASE = PhaseConfig(
             optional_agents=[],
             edges=[],
         ),
-        # Round B (revision): DataAnalyst receives Reviewer critique via the
-        # temporal self-edge (Reviewer ran last round so TEMPORAL_HEURISTIC
-        # includes it as optional here). Collector rewrites the section in-place.
+        # Round B (revision): the Reviewer does NOT re-execute here. The graph
+        # forwards the review round's stored critique to DataAnalyst directly
+        # (see _execute_section_aware_phase) — re-running the Reviewer would cost
+        # a full re-review and could produce a different critique than the one
+        # that triggered this revision. Collector rewrites the section in-place.
         RoundTopology(
             required_agents=["DataAnalyst", "Collector"],
-            optional_agents=["Reviewer", "Researcher"],
+            optional_agents=["Researcher"],
             edges=[
-                ("Reviewer", "DataAnalyst"),    # Critique → correction context
                 ("Researcher", "DataAnalyst"),  # Evidence gap fill
                 ("DataAnalyst", "Collector"),   # Corrected content
             ],
