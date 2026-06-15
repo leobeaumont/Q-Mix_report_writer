@@ -30,6 +30,7 @@ from handcrafted_graph.phases import PhaseConfig, PhaseType, RoundTopology, PHAS
 from handcrafted_graph.scheduler import RoundScheduler, SkipStrategy
 from handcrafted_graph.state import PhaseState
 from handcrafted_graph.prompts.handcrafted_prompt_set import _extract_section_directive
+from agents.collector import _ABSENCE_RE
 from utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace, SourceBuffer
 
 logger = logging.getLogger("handcrafted_graph")
@@ -45,6 +46,12 @@ _REMOVAL_REQUEST_RE = re.compile(
     r'|\bsection\b[^.\n]{0,80}\b(?:removed?|deleted?|dropped|removal|deletion)\b',
     re.IGNORECASE,
 )
+# A line led by an all-caps bracketed sentinel, e.g. "[NO NEW EVIDENCE]",
+# "[WAITING_FOR_DIRECTIVE]", or "[RESEARCH_EXHAUSTED] RAG returned no documents."
+# (the trailing prose the Researcher appends). Used to detect a DataAnalyst
+# Round-A output that carries no blueprint content. Requires >=3 chars inside the
+# brackets so a stray single-letter token like "[A]" is not mistaken for a sentinel.
+_BRACKET_SENTINEL_RE = re.compile(r'^\[[A-Z0-9_ ]{3,}\]')
 _TOKEN_RE          = re.compile(r'[a-zA-Z0-9]+')
 _MIN_TOKEN_LEN        = 5   # minimum token length to be considered meaningful
 _MIN_CITATION_OVERLAP = 5   # shared tokens required to assign a citation
@@ -190,7 +197,7 @@ class HandcraftedGraph:
                 if phase.name == PhaseType.PLANNING:
                     la_node = self._get_node_by_name("LeadArchitect")
                     # The outline is produced in the first PLANNING round; later rounds
-                    # may output directives or signals. Scan all outputs and use the
+                    # may output directives or signals. Scan all outputs from newest and use the
                     # first one that looks like a numbered list.
                     la_outputs = la_node.last_memory.get("outputs", []) if la_node else []
                     la_last = ""
@@ -468,6 +475,35 @@ class HandcraftedGraph:
         titles = re.findall(r'^\d+[.)]\s+(.+?)$', text, re.MULTILINE)
         return [t.strip().rstrip('.,;:') for t in titles if t.strip()]
 
+    @staticmethod
+    def _drafting_blueprint_is_usable(da_output: str) -> bool:
+        """Return True when the DataAnalyst's DRAFTING Round-A output is a usable blueprint.
+
+        Mirrors Collector._data_analyst_has_content: the output is usable when at
+        least one non-empty line is neither a bare sentinel (e.g. [NO NEW EVIDENCE],
+        [WAITING_FOR_DIRECTIVE], an echoed [RESEARCH_EXHAUSTED]) nor an absence /
+        State-Deficiency marker. A blueprint that mixes real claims with a few
+        'State Deficiency: ...' lines still counts.
+
+        When this returns True the write round reuses the existing blueprint and
+        skips the redundant Researcher + DataAnalyst re-query. When it returns
+        False (pure-sentinel or empty output) the write round re-runs research as
+        a genuine second retrieval attempt for that section.
+        """
+        text = (da_output or "").strip()
+        if not text:
+            return False
+        for line in text.splitlines():
+            line = line.strip().strip("-").strip()
+            if not line:
+                continue
+            if _BRACKET_SENTINEL_RE.match(line):
+                continue          # bare sentinel line, e.g. [NO NEW EVIDENCE]
+            if _ABSENCE_RE.search(line):
+                continue          # absence / State Deficiency line
+            return True           # a real content line — blueprint is usable
+        return False
+
     async def _execute_drafting_phase(
         self,
         input: Dict[str, str],
@@ -558,18 +594,52 @@ class HandcraftedGraph:
                 overall_pbar.update(1)
 
             # ---- Round B: write ------------------------------------------
+            # If Round A produced a usable blueprint, skip the redundant Round B
+            # Researcher + DataAnalyst re-query and forward that blueprint straight
+            # to the Collector. The Round B research pass is reserved for the case
+            # where Round A failed to produce a blueprint (e.g. the Researcher hit
+            # [RESEARCH_EXHAUSTED] and the DataAnalyst emitted [NO NEW EVIDENCE]),
+            # giving that section a genuine second retrieval attempt.
+            da_node = self._get_node_by_name("DataAnalyst")
+            da_output = (
+                str(da_node.outputs[-1] or "")
+                if da_node is not None and da_node.outputs else ""
+            )
+            blueprint_ready = self._drafting_blueprint_is_usable(da_output)
+
             if overall_pbar is not None:
                 overall_pbar.set_description(
                     f"[DRAFTING] section {i + 1}/{n_sections} — write"
                 )
-            active_agents = await scheduler.get_active_agents(
-                write_topology, 1, task_input=input
-            )
-            logger.info(
-                f"  [drafting] Section {i + 1}/{n_sections} write: "
-                f"active={sorted(active_agents)}"
-            )
-            self._build_topology(write_topology, active_agents)
+
+            if blueprint_ready:
+                # Reuse Round A's blueprint. The DataAnalyst node still holds that
+                # output in node.outputs (memory is not cleared between a section's
+                # two rounds), so wiring a one-way DataAnalyst → Collector spatial
+                # edge delivers it via get_spatial_info() exactly as if the
+                # DataAnalyst had produced it this round — without re-executing it.
+                # This is the same forwarding pattern used in SECTION_REVIEW
+                # revision rounds (Reviewer → DataAnalyst).
+                active_agents = {"Collector"}
+                logger.info(
+                    f"  [drafting] Section {i + 1}/{n_sections} write: "
+                    f"reusing Round A blueprint — skipping Researcher/DataAnalyst."
+                )
+                self._build_topology(write_topology, active_agents)
+                collector_node = self.nodes.get(self.collector_id)
+                if da_node is not None and collector_node is not None:
+                    da_node.add_successor(collector_node, "spatial")
+            else:
+                active_agents = await scheduler.get_active_agents(
+                    write_topology, 1, task_input=input
+                )
+                logger.info(
+                    f"  [drafting] Section {i + 1}/{n_sections} write: "
+                    f"Round A produced no blueprint — retrying research. "
+                    f"active={sorted(active_agents)}"
+                )
+                self._build_topology(write_topology, active_agents)
+
             self._connect_temporal()
             if self.execution_trace is not None:
                 self._init_trace_round()
