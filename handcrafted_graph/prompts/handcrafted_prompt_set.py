@@ -342,9 +342,11 @@ class HandcraftedPromptSet(PromptSet):
                 if role == "Reviewer":
                     objective = (
                         "You are in RE-VALIDATION MODE. Do NOT perform a general quality audit. "
-                        "You will be shown the exact issues flagged in the previous validation pass. "
-                        "For each issue relevant to the sections in your current window, state "
-                        "RESOLVED or STILL PRESENT. Report nothing else."
+                        "You will be shown the exact issues flagged in the previous pass, the "
+                        "corrections that were applied to fix them, and the current text of every "
+                        "section involved. For each issue, judge from the CURRENT text — not the "
+                        "original wording of the complaint — whether it is now RESOLVED or STILL "
+                        "PRESENT. Report nothing else."
                     )
                 elif role == "Lead Architect":
                     objective = (
@@ -431,13 +433,22 @@ class HandcraftedPromptSet(PromptSet):
                 # It must not flag anything new — only report resolved / still-present.
                 if prior_issues and role == "Reviewer":
                     current_ids = ", ".join(s["id"] for s in report_state.sections)
+                    directive = report_state.validation_directive
+                    directive_block = (
+                        f"\n**Corrections applied to fix these issues:**\n{directive[:1500]}\n"
+                        if directive else ""
+                    )
                     block += (
                         f"\n**RE-VALIDATION CHECKLIST — prior issues to verify:**\n"
                         f"**Sections still in the report:** {current_ids}\n"
                         f"(Any section not in this list has been removed as part of the fix.)\n\n"
-                        f"{prior_issues[:1200]}\n\n"
-                        f"For each issue above that involves the sections in this window ({ids}), "
-                        f"state RESOLVED or STILL PRESENT. "
+                        f"**Issues flagged in the previous pass:**\n{prior_issues[:1200]}\n"
+                        f"{directive_block}\n"
+                        f"The current full text of every section involved is shown above. "
+                        f"For each issue, verify against that CURRENT text — not the original "
+                        f"wording of the complaint — whether it is now RESOLVED or STILL PRESENT. "
+                        f"If the applied correction removed the contradiction or unsupported claim, "
+                        f"the issue is RESOLVED even if the topic is still discussed. "
                         f"If an issue references a section that has been removed from the report, "
                         f"mark it as RESOLVED. "
                         f"Do NOT flag any new issues. Do NOT comment on anything not in this list.\n"

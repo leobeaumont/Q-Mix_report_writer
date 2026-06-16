@@ -258,9 +258,7 @@ class HandcraftedGraph:
             val_total = 0
             for p in validation_phases:
                 if p.window_aware:
-                    windows = self._build_section_windows(
-                        sections, p.window_size, p.window_overlap_sections
-                    )
+                    windows = self._validation_windows(report_state, p)
                     val_total += len(windows) + 1
                 else:
                     val_total += p.max_rounds
@@ -933,6 +931,42 @@ class HandcraftedGraph:
             i += max(1, len(window) - overlap_sections)
         return windows
 
+    @staticmethod
+    def _revalidation_sections(report_state) -> List[dict]:
+        """Sections to re-audit: every section named in the prior issues or directive.
+
+        For a cross-section contradiction the first-pass issue text names both
+        sections (e.g. "section_2 ... contradicts section_3 ...") and the
+        decomposed directive carries a per-section entry for each, so the union of
+        IDs parsed from both covers all sides of every issue. Returned in report
+        order. Falls back to the full report if no section IDs can be parsed.
+        """
+        text = f"{report_state.validation_directive or ''}\n{report_state.validation_issues or ''}"
+        nums = re.findall(r'section[_ ]?(\d+)', text, re.IGNORECASE)
+        ids = {f"section_{n}" for n in nums}
+        if not ids:
+            return list(report_state.sections)
+        named = [s for s in report_state.sections if s["id"] in ids]
+        return named or list(report_state.sections)
+
+    def _validation_windows(self, report_state, phase) -> List[List[dict]]:
+        """Group sections into review windows for the VALIDATION phase.
+
+        First pass: sliding overlapping windows bounded by window_size.
+        Re-validation pass (validation_issues set): a SINGLE window containing
+        every section referenced by the prior issues/directive, so a cross-section
+        fix is always verified with both sides visible at once. The sliding
+        windows cannot do this when the two contradicting sections fall in
+        different windows — a partial-view window can only guess, and a single
+        false "STILL PRESENT" vote fails the whole pass.
+        """
+        if report_state.validation_issues:
+            rv = self._revalidation_sections(report_state)
+            return [rv] if rv else []
+        return self._build_section_windows(
+            report_state.sections, phase.window_size, phase.window_overlap_sections
+        )
+
     async def _execute_window_aware_phase(
         self,
         input: Dict[str, str],
@@ -955,10 +989,7 @@ class HandcraftedGraph:
         Memory is cleared between windows to prevent cross-window contamination.
         """
         report_state = ReportState.instance()
-        sections = report_state.sections
-        windows = self._build_section_windows(
-            sections, phase.window_size, phase.window_overlap_sections
-        )
+        windows = self._validation_windows(report_state, phase)
         n_windows = len(windows)
 
         if n_windows == 0:
