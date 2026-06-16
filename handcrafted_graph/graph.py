@@ -1306,9 +1306,16 @@ class HandcraftedGraph:
             "Give the shortening section a specific UNIQUE angle to retain so it cannot end up "
             "saying the same thing as the section it is being differentiated from.\n"
             "3. For severe transitions: name which section's opening or closing sentence to revise.\n"
-            "4. NEVER write 'because section_X says' or 'consistent with section_X' or 'as per "
-            "section_Y' — each instruction must stand alone. Reference only physical facts, "
-            "observational evidence, or source citations, never other section IDs."
+            "4. CRITICAL — `section_N` labels are INTERNAL identifiers the reader never sees. "
+            "No section identifier (section_1, section_2, ...) may appear ANYWHERE in your "
+            "output: not in the instruction, and not inside any replacement text you quote. "
+            "This is the most common failure on repetition fixes — do NOT condense a duplicate "
+            "by cross-referencing another section, e.g. 'established in section_2', 'derived in "
+            "section_3', 'the parametrization from section_4', or 'as in section_6'. Instead "
+            "either state the point self-containedly in condensed form, or refer to it by its "
+            "topic in plain words (e.g. 'as established for even-even nuclei'). Each instruction "
+            "must stand alone and reference only physical facts, observational evidence, or "
+            "source citations — never another section."
         )
         section_list = report_state.list_sections(verbose=True)
         user = (
@@ -1316,10 +1323,15 @@ class HandcraftedGraph:
             f"### Identified issues\n{combined_issues}\n\n"
             "Output ONLY a bulleted list using this exact format:\n"
             "  - <section_id>: <specific action with exact value if applicable>\n\n"
-            "One bullet per section that needs changing. If the same factual value must appear in "
+            "One bullet per section that needs changing. The section_id is used ONLY as the "
+            "bullet label — never write it inside the action text or inside any quoted "
+            "replacement prose (see rule 4). Any text you put in quotes will be inserted "
+            "verbatim into the report, so it must read as self-contained prose. "
+            "If the same factual value must appear in "
             "multiple sections, list each section separately and give EACH a distinct angle or "
             "sub-topic so they do not duplicate each other. "
-            "Use exact section IDs from the list above. Skip praise or general observations."
+            "Use exact section IDs from the list above for the bullet labels only. "
+            "Skip praise or general observations."
         )
         message = [
             {"role": "system", "content": system},

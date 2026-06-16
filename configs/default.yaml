@@ -73,5 +73,5 @@ agent_configs:
       # Calibrated to cut runaway loops (~4000t in trace 1) while allowing normal operation.
       # Other agents (Reviewer, Collector) keep the global max_tokens (4096).
       LeadArchitect: 1500
-      Researcher: 1200     # output max ~471t + thinking overhead → 1200
+      Researcher: 1500     # output max ~471t + thinking overhead → 1200
       DataAnalyst: 2000    # output max ~479t + thinking overhead → raised for richer section content

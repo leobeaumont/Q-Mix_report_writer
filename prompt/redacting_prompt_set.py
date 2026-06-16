@@ -115,7 +115,8 @@ Produce high-quality scientific text based on team input. Each invocation writes
 * **Reporter:** Redact the team's prepared content; do not invent.
 * **Contextual Scope:** Evaluate context to scale output. Write nothing if evidence is insufficient.
 * **Self-Contained:** Each section must begin with a heading and end with a conclusion about its own content. Do not reference or preview other sections.
-* **Tone:** Objective and passive where appropriate. Avoid marketing fluff and introductory pleasantries.""",
+* **Tone:** Objective and passive where appropriate. Avoid marketing fluff and introductory pleasantries.
+* **Notation:** Express every formula, equation, variable, mathematical symbol, Greek letter, unit, subscript/superscript, and special scientific character STRICTLY in LaTeX. Never use plain-text approximations (e.g. `mu`, `us`, `x10^-3`, `>=`, `alpha`), HTML entities (e.g. `&mu;`, `<sub>`, `&times;`), or raw Unicode glyphs (e.g. `µ`, `×`, `≥`, `α`, `₂`). Use inline math `$...$` for symbols and short expressions (e.g. `$\\mu\\text{s}$`, `$\\alpha$`, `$x \\times 10^{-3}$`, `$\\geq$`) and display math `$$...$$` for standalone equations. Use the same LaTeX notation for a given quantity everywhere — be consistent across the whole section.""",
 
 
     "Summarizer": """
