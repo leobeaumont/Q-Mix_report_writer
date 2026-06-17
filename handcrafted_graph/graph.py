@@ -369,6 +369,15 @@ class HandcraftedGraph:
         # ── Assemble final report ──────────────────────────────────────────
         self._build_bibliography()
         report = report_state.content
+
+        # Reader-facing abstract: generated over the FINAL body (post-validation,
+        # post-revision) so it reflects the report as actually shipped. Prepended
+        # as the first `## Abstract` section; the PDF exporter renders the title
+        # page separately, so this lands at the top of the body.
+        abstract = await self._generate_abstract(report_state)
+        if abstract:
+            report = f"## Abstract\n\n{abstract}\n\n" + report.lstrip()
+
         if report_state.bibliography:
             report = report.rstrip() + "\n\n" + report_state.bibliography
 
@@ -1363,6 +1372,64 @@ class HandcraftedGraph:
         except Exception as exc:
             logger.warning(f"[{self.id}] Directive decomposition failed: {exc}")
             return combined_issues
+
+    async def _generate_abstract(self, report_state) -> str:
+        """Write a concise reader-facing abstract for the finished report.
+
+        Runs once at assembly time over the final body content, so it reflects
+        the report after all validation/revision is complete. Returns the
+        abstract paragraph (no heading), or "" if no body exists or the call
+        fails — callers must treat "" as "skip the abstract".
+        """
+        body = (report_state.content or "").strip()
+        if not body:
+            return ""
+
+        llm = self._get_any_llm()
+        if llm is None:
+            return ""
+
+        system = (
+            "You are a scientific editor writing the abstract for a completed "
+            "technical report. Summarise the report for a reader deciding whether "
+            "to read it.\n\n"
+            "RULES:\n"
+            "1. Write ONE self-contained paragraph of roughly 150-250 words.\n"
+            "2. Cover the report's scope/objective, the approach or evidence it "
+            "draws on, its key findings, and its main conclusions — in that order.\n"
+            "3. Plain expository prose. Do NOT include a heading, a 'In this report' "
+            "preamble, bullet points, or section references of any kind.\n"
+            "4. Do NOT include citation tags (e.g. [cite:3]), bibliography numbers, "
+            "or figure/section labels. The abstract must read as standalone prose.\n"
+            "5. Use only information present in the report body below — do not "
+            "introduce claims, numbers, or conclusions that are not in the text."
+        )
+        user = (
+            f"### Report subject\n{report_state.task}\n\n"
+            f"### Report body\n{body}\n\n"
+            "Write the abstract now. Output ONLY the abstract paragraph, with no "
+            "heading and no surrounding commentary."
+        )
+        message = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        try:
+            response = await llm.agen(message, calling_agent="LeadArchitect")
+        except Exception as exc:
+            logger.warning(f"[{self.id}] Abstract generation failed: {exc}")
+            return ""
+
+        abstract = (response or "").strip()
+        if not abstract:
+            return ""
+
+        # Strip a leading "Abstract"/"## Abstract" heading if the model added one
+        # despite the instruction (we supply the heading ourselves at assembly).
+        abstract = re.sub(r"(?i)^\s*#*\s*abstract\s*[:\-]?\s*\n+", "", abstract).strip()
+        # Remove any stray citation tags so the abstract stays self-contained.
+        abstract = re.sub(r"\s*\[cite:[^\]]*\]", "", abstract).strip()
+        return abstract
 
     # ------------------------------------------------------------------
     # Bibliography
