@@ -57,6 +57,26 @@ _MIN_TOKEN_LEN        = 5   # minimum token length to be considered meaningful
 _MIN_CITATION_OVERLAP = 5   # shared tokens required to assign a citation
 _MIN_SENTENCE_TOKENS  = 5   # sentence must have this many tokens to be a candidate
 
+# The model sometimes names a source inline in its prose (e.g. quoting the
+# filename and page it drew from) rather than leaving the sentence for the
+# citation pass to tag. _apply_citation_tags() rewrites these inline references
+# into proper [cite:N, p.X] tags alongside the overlap-based tagging. A source
+# filename is an arXiv-style "*.pdf". Two surface forms are handled:
+#   1. Bracketed:  "[2105.06979.pdf | Page: 26]", "[2605.30554.pdf, Page 2 and 11]",
+#                  "[1711.02644.pdf, Page 4]", "[2605.30554.pdf]"
+#   2. Prose:      "Source 2105.06979.pdf (Page 2)", "(2605.26692.pdf)", "Source 0410066.pdf"
+_INLINE_FILE = r'[A-Za-z0-9][A-Za-z0-9._-]*\.pdf'
+_INLINE_PAGES = r'(?:\|\s*|,\s*)?(?:Pages?|pp?\.)\s*:?\s*([0-9][0-9,\s]*(?:and\s*[0-9]+)?)'
+_INLINE_REF_BRACKET_RE = re.compile(
+    rf'\[\s*({_INLINE_FILE})\s*(?:{_INLINE_PAGES})?\s*\]',
+    re.IGNORECASE,
+)
+_INLINE_REF_SOURCE_RE = re.compile(
+    rf'(?:Sources?\s+)({_INLINE_FILE})\s*(?:\(\s*{_INLINE_PAGES}\s*\))?',
+    re.IGNORECASE,
+)
+_INLINE_REF_PAREN_RE = re.compile(rf'\(\s*({_INLINE_FILE})\s*\)')
+
 _STOPWORDS = frozenset({
     # 2–3 letter function words
     "the", "and", "for", "are", "was", "its", "his", "her", "our", "has",
@@ -1472,8 +1492,15 @@ class HandcraftedGraph:
         sources = section.get("sources", [])
         bib_map = report_state.bibliography_map  # mutated in-place on first citation
 
-        if not sources:
-            return
+        # Known source filenames (global, case-insensitive) used to resolve
+        # inline references. Includes sources already numbered in earlier sections.
+        known_lc: Dict[str, str] = {}
+        for doc in report_state.sources:
+            s = doc.get("source", "").strip()
+            if s:
+                known_lc.setdefault(s.lower(), s)
+        for s in bib_map:
+            known_lc.setdefault(s.lower(), s)
 
         # Pre-tokenize each source chunk; bib numbers are assigned lazily.
         chunk_refs: List[Tuple[frozenset, str, Optional[str]]] = []
@@ -1485,11 +1512,13 @@ class HandcraftedGraph:
             page_str = str(page) if page and str(page) != "N/A" else None
             chunk_refs.append((self._tokenize(doc.get("content", "")), src, page_str))
 
-        if not chunk_refs:
+        # Nothing to do if we can neither score overlap nor resolve inline refs.
+        if not chunk_refs and not known_lc:
             return
 
         new_lines: List[str] = []
         tagged_count = 0
+        inline_count = 0
 
         for line in section["content"].split("\n"):
             # Preserve headings and blank lines as-is.
@@ -1505,6 +1534,19 @@ class HandcraftedGraph:
             for j, part in enumerate(parts):
                 # Odd-indexed parts are the captured whitespace separators.
                 if j % 2 != 0:
+                    new_parts.append(part)
+                    continue
+
+                # First rewrite any inline source references the model wrote in
+                # this sentence into proper [cite:N, p.X] tags.
+                if known_lc:
+                    part, n_inline = self._rewrite_inline_references(
+                        part, known_lc, bib_map, report_state
+                    )
+                    inline_count += n_inline
+
+                # Then run overlap-based tagging on the (possibly updated) sentence.
+                if not chunk_refs:
                     new_parts.append(part)
                     continue
 
@@ -1559,17 +1601,82 @@ class HandcraftedGraph:
 
             new_lines.append("".join(new_parts))
 
-        if tagged_count > 0:
+        if tagged_count > 0 or inline_count > 0:
             report_state.replace_section(section["id"], "\n".join(new_lines))
             logger.info(
                 f"[{self.id}] Section {section_idx + 1}: "
-                f"{tagged_count} citation tag(s) inserted."
+                f"{tagged_count} citation tag(s) inserted, "
+                f"{inline_count} inline reference(s) rewritten."
             )
         else:
             logger.info(
                 f"[{self.id}] Section {section_idx + 1}: "
                 f"no citation matches above threshold — section unchanged."
             )
+
+    def _rewrite_inline_references(
+        self,
+        text: str,
+        known_lc: Dict[str, str],
+        bib_map: Dict[str, int],
+        report_state,
+    ) -> Tuple[str, int]:
+        """Rewrite inline source references in one sentence into citation tags.
+
+        Handles bracketed forms (``[file.pdf | Page: 26]``), ``Source file.pdf
+        (Page 2)`` prose, and bare ``(file.pdf)`` mentions. Only references whose
+        filename resolves to a known source are rewritten; unknown filenames are
+        left untouched. Bib numbers are assigned lazily (matching the overlap
+        pass) and ``citation_counts`` is updated per new tag. At most one tag is
+        kept per source per sentence — the same rule the overlap pass enforces —
+        so a source already cited in the sentence (by an existing tag, a prior
+        inline reference, or one the overlap pass will add) is never duplicated;
+        the redundant inline reference text is dropped instead.
+
+        Returns ``(new_text, n_changes)``.
+        """
+        # Bib numbers already cited in this sentence. Seeded from any tags
+        # already present and grown as we rewrite, so we never emit two tags for
+        # the same source. \d+ captures the full number, so "1" never matches
+        # inside "[cite:12]".
+        present_nums = set(re.findall(r'\[cite:(\d+)', text))
+        n = 0
+
+        def _build_tag(num: int, pages: List[str]) -> str:
+            if not pages:
+                return f"[cite:{num}]"
+            if len(pages) == 1:
+                return f"[cite:{num}, p.{pages[0]}]"
+            return f"[cite:{num}, pp.{','.join(pages)}]"
+
+        def _repl(m: "re.Match") -> str:
+            nonlocal n
+            src = known_lc.get(m.group(1).strip().lower())
+            if src is None:
+                return m.group(0)  # unknown filename — leave the prose as written
+            pages = re.findall(r'\d+', m.group(2)) if m.re.groups >= 2 and m.group(2) else []
+            if src not in bib_map:
+                bib_map[src] = len(bib_map) + 1
+            num = bib_map[src]
+            n += 1
+            if str(num) in present_nums:
+                return ""  # source already cited in this sentence — drop reference
+            present_nums.add(str(num))
+            report_state.citation_counts[num] = (
+                report_state.citation_counts.get(num, 0) + 1
+            )
+            return _build_tag(num, pages)
+
+        out = _INLINE_REF_BRACKET_RE.sub(_repl, text)
+        out = _INLINE_REF_SOURCE_RE.sub(_repl, out)
+        out = _INLINE_REF_PAREN_RE.sub(_repl, out)
+
+        if n:
+            # Tidy whitespace / empty parens left by removed references.
+            out = re.sub(r'\(\s*\)', '', out)
+            out = re.sub(r'[ \t]{2,}', ' ', out)
+            out = re.sub(r'\s+([.,;:])', r'\1', out)
+        return out, n
 
     def _get_node_by_name(self, agent_name: str) -> Optional[Node]:
         for node in self.nodes.values():

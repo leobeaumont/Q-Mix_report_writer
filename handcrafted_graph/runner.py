@@ -43,6 +43,8 @@ async def run_handcrafted(
     phases: Optional[List[PhaseConfig]] = None,
     max_tries: int = 3,
     max_time: int = 300,
+    save_output: bool = True,
+    export_pdf: bool = True,
 ) -> Tuple[List[str], int]:
     """Run the full handcrafted pipeline for a single report task.
 
@@ -55,6 +57,11 @@ async def run_handcrafted(
         phases: Override the default phase sequence.
         max_tries: Retry attempts per agent on failure.
         max_time: Per-agent execution timeout in seconds.
+        save_output: Write the raw markdown report to a fresh run folder under
+            output/ (git-ignored). The folder path is logged.
+        export_pdf: After saving, also convert the report to LaTeX and compile it
+            to PDF in the same run folder. Requires save_output. Failures here are
+            logged but do not abort the run (the raw markdown is always kept).
 
     Returns:
         (answers, total_tokens)
@@ -92,6 +99,30 @@ async def run_handcrafted(
         f"report_length={len(answers[0])} chars"
     )
 
+    if save_output and answers:
+        from utils.report_export import save_raw_report
+        run_dir = save_raw_report(task=task, report=answers[0])
+        logger.info(f"Raw report saved to {run_dir}")
+
+        pdf_path = None
+        if export_pdf:
+            try:
+                from utils.markdown_to_latex import convert_run_dir
+                from utils.compile_pdf import compile_run_dir
+                convert_run_dir(run_dir)
+                pdf_path = compile_run_dir(run_dir)
+                logger.info(f"Report PDF compiled to {pdf_path}")
+            except Exception as e:
+                logger.warning(
+                    f"PDF export failed ({e}). Raw markdown is available at {run_dir}."
+                )
+
+        # Surface the output location(s) to the user (the report body itself is
+        # written to disk, not printed to the terminal).
+        print(f"\nReport saved to: {run_dir}")
+        if pdf_path is not None:
+            print(f"PDF: {pdf_path}")
+
     if execution_trace:
         from utils.globals import ExecutionTrace
         ExecutionTrace.instance().save_trace("handcrafted_trace.json")
@@ -128,6 +159,10 @@ if __name__ == "__main__":
         help="Skip strategy for optional agents.",
     )
     parser.add_argument("--trace", action="store_true", help="Save execution trace.")
+    parser.add_argument(
+        "--no-pdf", action="store_true",
+        help="Skip LaTeX/PDF export (only save the raw markdown report).",
+    )
     args = parser.parse_args()
 
     answers, tokens = asyncio.run(
@@ -136,10 +171,10 @@ if __name__ == "__main__":
             llm_name=args.llm,
             skip_strategy=SkipStrategy(args.skip_strategy),
             execution_trace=args.trace,
+            export_pdf=not args.no_pdf,
         )
     )
 
     print("\n" + "=" * 60)
     print(f"Total tokens used: {tokens}")
     print("=" * 60)
-    print(answers[0])

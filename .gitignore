@@ -14,3 +14,5 @@ chroma_data/
 *.pdf
 scoring_*.md
 arxiv_downloads/
+output/
+.tools/

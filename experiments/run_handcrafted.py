@@ -88,9 +88,6 @@ def main():
     print(f"  Report length:      {len(report)} chars")
     print("=" * 60)
     print()
-    print("--- Report ---")
-    print(report)
-    print()
 
     if args.trace:
         trace_path = "handcrafted_trace.json"
