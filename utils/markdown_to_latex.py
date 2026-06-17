@@ -102,7 +102,10 @@ _GREEK_MAP = {
     "Ψ": r"$\Psi$", "Ω": r"$\Omega$",
 }
 
-# Inline math span: $...$ with no embedded $ (no nested / display math in input).
+# Display math the pipeline sometimes emits as $$ ... $$ (often spanning lines).
+# Must be handled before inline math so its dollar pairs are consumed cleanly.
+_DISPLAY_MATH_RE = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
+# Inline math span: $...$ with no embedded $.
 _MATH_RE = re.compile(r"\$[^$]+\$")
 # Inline equations longer than this many characters of source are promoted to a
 # display equation (broken onto their own line at full size). \fitmath only
@@ -154,6 +157,12 @@ def convert_inline(text: str) -> str:
         placeholders[token] = value
         return token
 
+    def _render_display(m: "re.Match") -> str:
+        inner = m.group(1).strip()
+        if len(inner) > _LONG_MATH_THRESHOLD:
+            return _stash(f"\\fitmath{{{inner}}}", "M")
+        return _stash(f"\\[{inner}\\]", "M")
+
     def _render_math(m: "re.Match") -> str:
         span = m.group()
         inner = span[1:-1]  # strip the $ delimiters
@@ -161,6 +170,9 @@ def convert_inline(text: str) -> str:
             return _stash(f"\\fitmath{{{inner}}}", "M")
         return _stash(span, "M")
 
+    # Display math ($$...$$) first, so its dollar pairs are consumed before the
+    # inline pass — otherwise stray $ desynchronise all later inline matching.
+    text = _DISPLAY_MATH_RE.sub(_render_display, text)
     text = _MATH_RE.sub(_render_math, text)
     text = _CITE_RE.sub(
         lambda m: _stash(_cite_to_latex(m.group(1), m.group(2)), "C"), text
