@@ -41,8 +41,16 @@ from .report_export import RAW_MARKDOWN_NAME, LATEX_NAME
 
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
-# Filenames tried, in order, when no explicit logo is given. The first that
-# exists wins; if none exist the title page simply omits the logo.
+# SCK CEN brand assets copied into each run folder so the .tex is self-contained.
+# The title page / running header reference these by name, each guarded by
+# \IfFileExists so the document still compiles if an asset is missing.
+SCK_LOGO = "SCK_logo.png"          # black "sck cen" wordmark (title page)
+QMIX_LOGO = "logo_qmix.png"        # Q-Mix report-writer pipeline emblem
+SCK_BACKGROUND = "background_sck.png"  # dot-pattern brand background (title page)
+BRAND_ASSETS = [SCK_LOGO, QMIX_LOGO, SCK_BACKGROUND]
+
+# Filenames tried, in order, for an explicit logo override (replaces SCK_LOGO on
+# the title page). If none exist the title page falls back to SCK_LOGO.
 _DEFAULT_LOGO_CANDIDATES = ["logo.png", "sckcen.png", "sck_cen.png", "SCKCEN.png", "logo.pdf"]
 
 DEFAULT_AUTHOR = r"Q-Mix report writer designed by L\'eo Beaumont at SCK CEN"
@@ -374,8 +382,12 @@ def _parse_bibliography(bib_region: str) -> Tuple[List[Tuple[str, str, str]], Li
 # ---------------------------------------------------------------------------
 
 def _arxiv_render(filename: str, arxiv_id: str) -> str:
-    """Render one source as ``\\textbf{file} \\textit{(arXiv:id)}`` with a link."""
-    entry = f"\\textbf{{{_escape_latex(filename)}}}"
+    """Render one source as ``\\textbf{file} \\textit{(arXiv:id)}`` with a link.
+
+    The filename is set in dark purple; the arXiv link inherits the lavender
+    ``urlcolor`` from hyperref so sources read as a coherent branded block.
+    """
+    entry = f"\\textbf{{\\textcolor{{sckpurple}}{{{_escape_latex(filename)}}}}}"
     if arxiv_id:
         url = f"https://arxiv.org/abs/{arxiv_id}"
         entry += f" \\textit{{(\\href{{{url}}}{{arXiv:{_escape_latex(arxiv_id)}}})}}"
@@ -387,7 +399,9 @@ def _render_bibliography(cited: List[Tuple[str, str, str]]) -> str:
         return ""
     lines = [r"\begin{thebibliography}{99}"]
     for num, filename, arxiv in cited:
-        lines.append(f"\\bibitem[{num}]{{src{num}}} {_arxiv_render(filename, arxiv)}")
+        # Lavender entry label, e.g. [3], to match the brand palette.
+        label = f"{{\\textcolor{{scklavender}}{{{num}}}}}"
+        lines.append(f"\\bibitem[{label}]{{src{num}}} {_arxiv_render(filename, arxiv)}")
     lines.append(r"\end{thebibliography}")
     return "\n".join(lines)
 
@@ -413,46 +427,120 @@ def _pdf_safe(text: str) -> str:
 
 
 def _title_page(title: str, logo_rel: Optional[str], author: str, disclaimer: str) -> str:
-    logo_block = ""
-    if logo_rel:
-        # \IfFileExists keeps the document compilable even before the logo is added.
-        logo_block = (
-            f"\\IfFileExists{{{logo_rel}}}"
-            f"{{\\includegraphics[width=0.45\\textwidth]{{{logo_rel}}}\\\\[1.5cm]}}{{}}\n"
-        )
+    """Branded SCK CEN title page.
+
+    A flat white page with the SCK wordmark in the top-left corner and the Q-Mix
+    pipeline emblem (captioned "Q-Mix report writer") in the top-right. The report
+    title sits in dark purple below; the dot-pattern brand graphic is centred as a
+    decorative block to fill the page, with the disclaimer, author and date at the
+    foot. Every image is wrapped in \\IfFileExists so a missing asset never breaks
+    compilation.
+    """
+    sck_logo = logo_rel or SCK_LOGO
     return "\n".join(
         [
             r"\begin{titlepage}",
-            r"\centering",
-            logo_block + r"\vspace*{1cm}",
-            r"{\Large\scshape Technical Report\par}",
-            r"\vspace{1.5cm}",
-            r"{\huge\bfseries " + convert_inline(title) + r"\par}",
-            r"\vspace{2cm}",
-            r"\begin{minipage}{0.85\textwidth}\centering\itshape\small",
-            _escape_latex(disclaimer),
+            # ── Top logo row: SCK wordmark (left) / Q-Mix emblem (right) ──
+            r"\noindent",
+            r"\begin{minipage}[t]{0.48\textwidth}",
+            r"\raggedright",
+            f"\\IfFileExists{{{sck_logo}}}"
+            f"{{\\includegraphics[width=0.70\\linewidth]{{{sck_logo}}}}}{{}}",
+            r"\end{minipage}\hfill",
+            r"\begin{minipage}[t]{0.48\textwidth}",
+            r"\raggedleft",
+            f"\\IfFileExists{{{QMIX_LOGO}}}"
+            f"{{\\includegraphics[width=0.45\\linewidth]{{{QMIX_LOGO}}}\\par\\vspace{{0.2cm}}}}{{}}",
+            r"{\large\itshape\color{sckpurple}Q-Mix report writer}",
             r"\end{minipage}",
-            r"\vfill",
-            r"{\large " + author + r"\par}",
+            # \par closes the logo-row paragraph so the vspace below applies in
+            # vertical mode (otherwise it leaks past the title block).
+            r"\par",
+            # ── Title block (sits lower, just above the report title) ──
+            r"\vspace{2.5cm}",
+            r"\centering",
+            r"{\headingfont\color{scklavender}\Large\scshape Technical Report\par}",
             r"\vspace{0.5cm}",
-            r"{\today\par}",
+            r"{\headingfont\color{sckpurple}\huge\bfseries " + convert_inline(title) + r"\par}",
+            # ── Decorative brand graphic ──
+            r"\vspace{1.5cm}",
+            f"\\IfFileExists{{{SCK_BACKGROUND}}}"
+            f"{{\\includegraphics[width=0.825\\textwidth]{{{SCK_BACKGROUND}}}\\par}}{{}}",
+            # ── Footer block ──
+            r"\vfill",
+            r"\begin{minipage}{0.85\textwidth}\centering",
+            r"{\color{sckpurple!75}\itshape\small " + _escape_latex(disclaimer) + r"\par}",
+            r"\end{minipage}\par",
+            r"\vspace{0.8cm}",
+            r"{\color{sckpurple}\large " + author + r"\par}",
+            r"\vspace{0.2cm}",
+            r"{\color{scklavender}\today\par}",
             r"\end{titlepage}",
         ]
     )
 
 
 _PREAMBLE = r"""\documentclass[11pt,a4paper]{article}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{lmodern}
 \usepackage{amsmath,amssymb}
+
+% ---- Fonts (Tectonic / XeTeX) ----------------------------------------------
+% Body text: Segoe UI; section headings & running header: Aptos Display.
+% \headingfont falls back to the default bold face if a font is not installed,
+% so the document still builds.
+\usepackage{fontspec}
+\providecommand{\headingfont}{}
+\IfFontExistsTF{Segoe UI}{\setmainfont{Segoe UI}}{}
+\IfFontExistsTF{Aptos Display}{%
+  \newfontfamily\aptosheading{Aptos Display}%
+  \renewcommand{\headingfont}{\aptosheading}}{}
 \usepackage{textcomp}
 \usepackage{graphicx}
 \usepackage[export]{adjustbox}
 \usepackage[margin=2.5cm]{geometry}
 \usepackage{enumitem}
-\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage[colorlinks=true]{hyperref}
+
+% ---- SCK CEN brand palette -------------------------------------------------
+\definecolor{sckpurple}{HTML}{56256B}
+\definecolor{scklavender}{HTML}{9F4191}
+\definecolor{sckblue}{HTML}{A1DAF7}
+
+\hypersetup{
+  linkcolor=sckpurple,
+  citecolor=sckpurple,
+  urlcolor=scklavender,
+}
 \renewcommand{\refname}{Bibliography}
+
+% ---- Section headings in brand colours (Aptos Display) ---------------------
+\titleformat{\section}
+  {\headingfont\Large\bfseries\color{sckpurple}}{\thesection}{1em}{}
+  [{\color{scklavender}\titlerule[1pt]}]
+\titleformat{\subsection}
+  {\headingfont\large\bfseries\color{scklavender}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}
+  {\headingfont\normalsize\bfseries\color{sckpurple}}{\thesubsubsection}{1em}{}
+
+% ---- Brand-coloured list bullets -------------------------------------------
+\setlist[itemize,1]{label={\color{scklavender}\textbullet}}
+\setlist[itemize,2]{label={\color{sckpurple}\textendash}}
+
+% ---- Inline and display maths in dark purple -------------------------------
+\everymath\expandafter{\the\everymath \color{sckpurple}}
+\everydisplay\expandafter{\the\everydisplay \color{sckpurple}}
+
+% ---- Running header / footer in brand colours (Aptos Display) --------------
+% \fancyhead[L] (the document name) is set per-document after the preamble.
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[R]{\headingfont\small\bfseries\color{sckpurple}SCK CEN}
+\fancyfoot[C]{\small\color{sckpurple}\thepage}
+\renewcommand{\headrule}{{\color{scklavender}\hrule height 0.8pt}}
+\renewcommand{\footrulewidth}{0pt}
+
 % Over-long inline equations are promoted to a display equation on their own
 % line; adjustbox shrinks them only if they are still wider than the text line.
 \newcommand{\fitmath}[1]{\[\adjustbox{max width=\linewidth}{$\displaystyle #1$}\]}
@@ -478,6 +566,11 @@ def markdown_to_latex(
 
     parts: List[str] = [_PREAMBLE]
     parts.append(f"\\hypersetup{{pdftitle={{{_pdf_safe(title)}}}}}")
+    # Running left header shows the document name (the report title).
+    header_name = _escape_latex(_pdf_safe(title))
+    parts.append(
+        f"\\fancyhead[L]{{\\headingfont\\small\\itshape\\color{{sckpurple}}{header_name}}}"
+    )
     parts.append(r"\begin{document}")
     parts.append(_title_page(title, logo_rel, author, disclaimer))
     parts.append(r"\tableofcontents")
@@ -546,6 +639,15 @@ def convert_run_dir(
 
     md_text = md_path.read_text(encoding="utf-8")
 
+    # Copy the SCK CEN brand assets (wordmark, pipeline emblem, background) into
+    # the run folder so the .tex compiles standalone. Each is referenced via
+    # \IfFileExists, so any that is absent is simply skipped at compile time.
+    for asset_name in BRAND_ASSETS:
+        src = ASSETS_DIR / asset_name
+        if src.is_file():
+            shutil.copy(src, run_dir / asset_name)
+
+    # Optional explicit logo override (replaces the SCK wordmark on the title page).
     logo_rel: Optional[str] = None
     logo_src = _resolve_logo(logo)
     if logo_src is not None:

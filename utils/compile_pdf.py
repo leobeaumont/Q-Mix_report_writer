@@ -1,13 +1,13 @@
 """
 Compile a LaTeX report to PDF with zero manual setup.
 
-There is no pure-Python TeX engine, so a real LaTeX binary is required. To keep
-the user from having to install a multi-gigabyte TeX distribution, this module:
+There is no pure-Python TeX engine, so a real LaTeX binary is required.
+**Tectonic** is the only supported engine. To keep the user from having to
+install a multi-gigabyte TeX distribution, this module:
 
-  1. Uses any LaTeX engine already on PATH — preferring Tectonic, then
-     ``latexmk``, then ``pdflatex`` / ``xelatex``.
-  2. Otherwise downloads the **Tectonic** single-file binary for the current
-     OS / architecture into a git-ignored ``.tools/`` cache and uses that.
+  1. Uses a ``tectonic`` already on PATH or in the git-ignored ``.tools/`` cache.
+  2. Otherwise downloads the Tectonic single-file binary for the current
+     OS / architecture into ``.tools/`` and uses that.
 
 Tectonic is ideal here: it is one self-contained executable that fetches only
 the LaTeX packages a document needs, on demand, and runs the multiple passes
@@ -79,20 +79,19 @@ def _cached_tectonic() -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-def find_engine() -> Optional[Tuple[str, str]]:
-    """Find an available LaTeX engine.
+def find_tectonic() -> Optional[str]:
+    """Return a path to an existing Tectonic binary, or None.
 
-    Returns a ``(kind, path)`` tuple where ``kind`` is one of
-    ``"tectonic" | "latexmk" | "pdflatex" | "xelatex"``, or ``None`` if no
-    engine is available on PATH or in the local cache.
+    Checks the system ``PATH`` first, then the local ``.tools/`` download cache.
+    Tectonic is the only supported engine; if none is found the caller downloads
+    it via :func:`ensure_tectonic`.
     """
-    for kind in ("tectonic", "latexmk", "pdflatex", "xelatex"):
-        path = shutil.which(kind)
-        if path:
-            return kind, path
+    on_path = shutil.which("tectonic")
+    if on_path:
+        return on_path
     cached = _cached_tectonic()
     if cached:
-        return "tectonic", str(cached)
+        return str(cached)
     return None
 
 
@@ -187,23 +186,13 @@ def _run(cmd: List[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
-def _build_commands(kind: str, engine: str, tex: Path, out_dir: Path) -> List[List[str]]:
-    """Return the command(s) to run for the given engine.
+def _build_command(engine: str, tex: Path, out_dir: Path) -> List[str]:
+    """Return the Tectonic command to compile ``tex`` into ``out_dir``.
 
-    pdflatex / xelatex are run twice so the table of contents and the
-    ``thebibliography`` cross-references resolve. Tectonic and latexmk handle the
-    multi-pass logic themselves.
+    Tectonic resolves the table of contents and the ``thebibliography``
+    cross-references in a single invocation (it runs the required passes itself).
     """
-    name = tex.name
-    if kind == "tectonic":
-        return [[engine, "--keep-logs", "--outdir", str(out_dir), name]]
-    if kind == "latexmk":
-        return [[engine, "-pdf", "-interaction=nonstopmode", "-halt-on-error",
-                 f"-outdir={out_dir}", name]]
-    # pdflatex / xelatex — two passes.
-    one = [engine, "-interaction=nonstopmode", "-halt-on-error",
-           f"-output-directory={out_dir}", name]
-    return [one, one]
+    return [engine, "--keep-logs", "--outdir", str(out_dir), tex.name]
 
 
 def compile_pdf(tex_path, out_dir=None) -> Path:
@@ -216,7 +205,7 @@ def compile_pdf(tex_path, out_dir=None) -> Path:
 
     Raises:
         FileNotFoundError: if ``tex_path`` does not exist.
-        RuntimeError: if no engine is available or compilation fails.
+        RuntimeError: if Tectonic is unavailable or compilation fails.
     """
     tex_path = Path(tex_path).resolve()
     if not tex_path.is_file():
@@ -225,23 +214,18 @@ def compile_pdf(tex_path, out_dir=None) -> Path:
     out_dir = (Path(out_dir).resolve() if out_dir is not None else tex_path.parent)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    found = find_engine()
-    if found is None:
-        # No engine anywhere — try to fetch Tectonic automatically.
-        engine = str(ensure_tectonic())
-        kind = "tectonic"
-    else:
-        kind, engine = found
+    # Tectonic is the only supported engine: use one on PATH or in the local
+    # cache, otherwise download it automatically.
+    engine = find_tectonic() or str(ensure_tectonic())
 
-    last: Optional[subprocess.CompletedProcess] = None
-    for cmd in _build_commands(kind, engine, tex_path, out_dir):
-        last = _run(cmd, cwd=tex_path.parent)
-        if last.returncode != 0:
-            tail = (last.stdout or "")[-2000:] + "\n" + (last.stderr or "")[-1000:]
-            raise RuntimeError(
-                f"LaTeX compilation failed ({kind}, exit {last.returncode}).\n"
-                f"--- output tail ---\n{tail.strip()}"
-            )
+    cmd = _build_command(engine, tex_path, out_dir)
+    last = _run(cmd, cwd=tex_path.parent)
+    if last.returncode != 0:
+        tail = (last.stdout or "")[-2000:] + "\n" + (last.stderr or "")[-1000:]
+        raise RuntimeError(
+            f"LaTeX compilation failed (tectonic, exit {last.returncode}).\n"
+            f"--- output tail ---\n{tail.strip()}"
+        )
 
     pdf_path = out_dir / (tex_path.stem + ".pdf")
     if not pdf_path.is_file():

@@ -130,6 +130,10 @@ class HandcraftedGraph:
         self.phase_state = PhaseState.instance()
         self.execution_trace = ExecutionTrace.instance() if execution_trace else None
 
+        # Per-round LeadArchitect outputs captured during PLANNING, used to recover
+        # the section outline even when the final round emits a signal, not an outline.
+        self._planning_la_outputs: List[str] = []
+
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -215,18 +219,19 @@ class HandcraftedGraph:
                 # and store it in ReportState before RESEARCH buries the context.
                 # Also patch writing_pbar.total so the bar reflects actual DRAFTING rounds.
                 if phase.name == PhaseType.PLANNING:
-                    la_node = self._get_node_by_name("LeadArchitect")
-                    # The outline is produced in the first PLANNING round; later rounds
-                    # may output directives or signals. Scan all outputs from newest and use the
-                    # first one that looks like a numbered list.
-                    la_outputs = la_node.last_memory.get("outputs", []) if la_node else []
-                    la_last = ""
-                    for out in reversed(la_outputs):
-                        text = str(out or "").strip()
-                        if re.search(r'^\d+[.)]\s+', text, re.MULTILINE):
-                            la_last = text
+                    # The outline is normally produced in the latest PLANNING round,
+                    # but a later round may instead emit a directive or signal (e.g.
+                    # [AWAITING_COVERAGE_DATA]) with no outline. node.outputs is reset
+                    # every round, so last_memory only ever holds the final round —
+                    # we rely on the per-round LA outputs captured during the phase.
+                    # Prefer the most recent round whose output parses into a section
+                    # list; fall back to earlier rounds when the latest has none.
+                    planned: List[str] = []
+                    for out in reversed(self._planning_la_outputs):
+                        candidate = self._parse_section_titles(str(out or ""))
+                        if candidate:
+                            planned = candidate
                             break
-                    planned = self._parse_section_titles(la_last)
                     ReportState.instance().planned_sections = planned
                     logger.info(
                         f"[{self.id}] Extracted {len(planned)} planned section(s) from PLANNING."
@@ -430,6 +435,13 @@ class HandcraftedGraph:
 
         n_patterns = len(phase.round_topologies)
 
+        # Capture each PLANNING round's LeadArchitect output so the outline can be
+        # recovered later even if the final round emitted a signal instead of the
+        # outline. node.outputs is wiped at the start of every round, so this is
+        # the only place the per-round outline survives.
+        if phase.name == PhaseType.PLANNING:
+            self._planning_la_outputs = []
+
         for round_idx in range(phase.max_rounds):
             topology = phase.round_topologies[round_idx % n_patterns]
 
@@ -469,6 +481,14 @@ class HandcraftedGraph:
             self._update_memory()
             self._clear_spatial()
             self.phase_state.increment_round()
+
+            if phase.name == PhaseType.PLANNING:
+                la_node = self._get_node_by_name("LeadArchitect")
+                la_out = (
+                    str(la_node.outputs[-1] or "")
+                    if la_node and la_node.outputs else ""
+                )
+                self._planning_la_outputs.append(la_out)
 
             if overall_pbar is not None:
                 overall_pbar.update(1)
