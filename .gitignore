@@ -8,7 +8,7 @@ __pycache__/
 *.pt
 *.log
 .venv
-chroma_data/
+chroma_data*/
 *.json
 *.html
 *.pdf

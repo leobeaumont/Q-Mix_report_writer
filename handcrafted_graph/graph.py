@@ -63,12 +63,13 @@ _MIN_SENTENCE_TOKENS  = 5   # sentence must have this many tokens to be a candid
 # into proper [cite:N, p.X] tags alongside the overlap-based tagging. A source
 # filename is an arXiv-style "*.pdf". Two surface forms are handled:
 #   1. Bracketed:  "[2105.06979.pdf | Page: 26]", "[2605.30554.pdf, Page 2 and 11]",
-#                  "[1711.02644.pdf, Page 4]", "[2605.30554.pdf]"
+#                  "[1711.02644.pdf, Page 4]", "[2605.30554.pdf]",
+#                  "[Source: 9308022.pdf | Page: 29]" (optional "Source:" prefix)
 #   2. Prose:      "Source 2105.06979.pdf (Page 2)", "(2605.26692.pdf)", "Source 0410066.pdf"
 _INLINE_FILE = r'[A-Za-z0-9][A-Za-z0-9._-]*\.pdf'
 _INLINE_PAGES = r'(?:\|\s*|,\s*)?(?:Pages?|pp?\.)\s*:?\s*([0-9][0-9,\s]*(?:and\s*[0-9]+)?)'
 _INLINE_REF_BRACKET_RE = re.compile(
-    rf'\[\s*({_INLINE_FILE})\s*(?:{_INLINE_PAGES})?\s*\]',
+    rf'\[\s*(?:Sources?\s*:?\s*)?({_INLINE_FILE})\s*(?:{_INLINE_PAGES})?\s*\]',
     re.IGNORECASE,
 )
 _INLINE_REF_SOURCE_RE = re.compile(
@@ -76,6 +77,18 @@ _INLINE_REF_SOURCE_RE = re.compile(
     re.IGNORECASE,
 )
 _INLINE_REF_PAREN_RE = re.compile(rf'\(\s*({_INLINE_FILE})\s*\)')
+
+# Bare bracketed reference markers the model sometimes copies verbatim from a
+# retrieved chunk's own reference list, e.g. "Ref. [32]", "[12, 14]". The number
+# indexes that source's bibliography, never our [cite:N] scheme, so any such
+# marker whose number is not among the [cite:N] tags applied to the same
+# sentence is a stray reference dropped by _strip_orphan_citation_markers().
+# The leading "\d" requirement means real "[cite:N]" tags (which start with "c")
+# are never matched.
+_ORPHAN_CITE_RE = re.compile(
+    r'(?:Refs?\.?|References?)?\s*\[\s*\d+(?:\s*[,&]\s*\d+)*\s*\]',
+    re.IGNORECASE,
+)
 
 _STOPWORDS = frozenset({
     # 2–3 letter function words
@@ -93,6 +106,17 @@ _STOPWORDS = frozenset({
     "show", "shows", "shown", "note", "noted", "term", "terms", "well",
     "thus", "hence", "which", "where", "when", "how", "now", "then",
 })
+
+
+class NoCorpusCoverageError(RuntimeError):
+    """Raised when PLANNING produces no section outline.
+
+    This means the Researcher's coverage scan found no documents in the
+    knowledge base relevant to the requested task, so the LeadArchitect could
+    not ground an outline. Rather than silently drafting an empty report (and
+    later hallucinating a validation directive over non-existent sections), the
+    pipeline aborts here with a clear, actionable message.
+    """
 
 
 class HandcraftedGraph:
@@ -236,14 +260,27 @@ class HandcraftedGraph:
                     logger.info(
                         f"[{self.id}] Extracted {len(planned)} planned section(s) from PLANNING."
                     )
-                    if planned:
-                        drafting_phase = next(
-                            (p for p in writing_phases if p.name == PhaseType.DRAFTING), None
+                    # Fail fast on empty corpus coverage. An empty outline means the
+                    # Researcher's coverage scan confirmed no relevant documents (the
+                    # LeadArchitect emits [AWAITING_COVERAGE_DATA] instead of a list).
+                    # Continuing would draft an empty report and then hallucinate a
+                    # validation directive over sections that do not exist — abort with
+                    # a clear message instead.
+                    if not planned:
+                        task_desc = str(input.get("task", "")).strip()[:120]
+                        raise NoCorpusCoverageError(
+                            f"PLANNING produced no section outline for task "
+                            f"{task_desc!r}. The knowledge base appears to contain no "
+                            f"documents relevant to this subject, so no grounded report "
+                            f"can be written. Aborting before drafting an empty report."
                         )
-                        if drafting_phase:
-                            delta = 2 * len(planned) - drafting_phase.max_rounds
-                            writing_pbar.total += delta
-                            writing_pbar.refresh()
+                    drafting_phase = next(
+                        (p for p in writing_phases if p.name == PhaseType.DRAFTING), None
+                    )
+                    if drafting_phase:
+                        delta = 2 * len(planned) - drafting_phase.max_rounds
+                        writing_pbar.total += delta
+                        writing_pbar.refresh()
         finally:
             writing_pbar.close()
 
@@ -386,8 +423,16 @@ class HandcraftedGraph:
         if report_state.bibliography:
             report = report.rstrip() + "\n\n" + report_state.bibliography
 
-        if self.execution_trace is not None:
-            self.execution_trace.trace[-1]["Collector"]["report_state"] = report
+        # Stamp the final report onto the last trace round's Collector slot. The
+        # last entry is not always a normal round: pass-boundary markers
+        # (__decomposition__, __validation_retry__) carry no "Collector" key, and
+        # when the report has 0 sections the correction phases skip without
+        # appending a round — leaving a marker as trace[-1]. Guard accordingly so
+        # finalisation never raises KeyError.
+        if self.execution_trace is not None and self.execution_trace.trace:
+            last_round = self.execution_trace.trace[-1]
+            if "Collector" in last_round:
+                last_round["Collector"]["report_state"] = report
 
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
         total_tokens = int(tokens_after - tokens_before)
@@ -1476,19 +1521,34 @@ class HandcraftedGraph:
             logger.warning(f"[{self.id}] Bibliography: no sources collected — skipping.")
             return
 
+        # Map each source filename to the bibliographic metadata (title/author/year)
+        # carried on its retrieved chunks. First non-empty wins per source.
+        meta_by_source: dict = {}
+        for doc in report_state.sources:
+            src = (doc.get("source") or "").strip()
+            if not src or src in meta_by_source:
+                continue
+            fields = {k: (doc.get(k) or "").strip() for k in ("title", "author", "year")}
+            if any(fields.values()):
+                meta_by_source[src] = fields
+
         cited_lines: list = ["## Bibliography\n"]
         for source_name, num in sorted(bib_map.items(), key=lambda x: x[1]):
             c = counts.get(num, 0)
             count_tag = f" *({c} citation{'s' if c != 1 else ''})*"
-            cited_lines.append(self._format_bib_entry(num, source_name) + count_tag)
+            cited_lines.append(
+                self._format_bib_entry(num, source_name, meta_by_source.get(source_name)) + count_tag
+            )
 
         seen: set = set()
         consulted_lines: list = []
         for doc in report_state.sources:
-            src = doc.get("source", "").strip()
+            src = (doc.get("source") or "").strip()
             if src and src not in bib_map and src not in seen:
                 seen.add(src)
-                consulted_lines.append(self._format_consulted_entry(src))
+                consulted_lines.append(
+                    self._format_consulted_entry(src, meta_by_source.get(src))
+                )
 
         report_state.bibliography = "\n".join(cited_lines)
         if consulted_lines:
@@ -1502,37 +1562,61 @@ class HandcraftedGraph:
         )
 
     @classmethod
-    def _format_bib_entry(cls, num: int, source_name: str) -> str:
-        """Return one markdown bibliography line for the given source filename."""
-        # Try new arXiv format first (e.g. 2605.30554.pdf)
-        m = cls._ARXIV_NEW_RE.match(source_name)
-        if m:
-            arxiv_id = m.group(1)
-            return f"[{num}] **{source_name}** *(arXiv:{arxiv_id})*"
-
-        # Try old arXiv format (e.g. 0208016.pdf — 7-digit hep-*/astro-ph IDs)
-        m = cls._ARXIV_OLD_RE.match(source_name)
-        if m:
-            arxiv_id = m.group(1)
-            return f"[{num}] **{source_name}** *(arXiv:{arxiv_id})*"
-
-        # Generic fallback: just the filename, file type noted
-        ext = source_name.rsplit(".", 1)[-1].upper() if "." in source_name else ""
-        type_tag = f" *({ext})*" if ext else ""
-        return f"[{num}] **{source_name}**{type_tag}"
+    def _arxiv_id_of(cls, source_name: str) -> str:
+        """Return the arXiv id encoded in the filename, or '' if it is not an arXiv PDF."""
+        m = cls._ARXIV_NEW_RE.match(source_name) or cls._ARXIV_OLD_RE.match(source_name)
+        return m.group(1) if m else ""
 
     @classmethod
-    def _format_consulted_entry(cls, source_name: str) -> str:
-        """Return one markdown consulted-sources line (no citation number)."""
-        m = cls._ARXIV_NEW_RE.match(source_name)
-        if m:
-            return f"- **{source_name}** *(arXiv:{m.group(1)})*"
-        m = cls._ARXIV_OLD_RE.match(source_name)
-        if m:
-            return f"- **{source_name}** *(arXiv:{m.group(1)})*"
+    def _compose_reference(cls, source_name: str, meta: Optional[dict]) -> str:
+        """Build a proper reference string from available metadata.
+
+        Renders "Author. “Title”. Year. (identifier)" using whatever fields are
+        present, always keeping the source filename as a locator so [cite:N] tags
+        remain traceable. Falls back to a filename-first entry when no
+        bibliographic metadata was extracted for the document.
+        """
+        meta = meta or {}
+        title = (meta.get("title") or "").strip()
+        author = (meta.get("author") or "").strip()
+        year = (meta.get("year") or "").strip()
+        arxiv_id = cls._arxiv_id_of(source_name)
+
+        # Identifier suffix: arXiv id (when present) plus the filename locator.
+        ident_bits = []
+        if arxiv_id:
+            ident_bits.append(f"arXiv:{arxiv_id}")
+        ident_bits.append(source_name)
+        ident = ", ".join(ident_bits)
+
+        parts = []
+        if author:
+            parts.append(author if author.endswith(".") else f"{author}.")
+        if title:
+            # Curly quotes become proper LaTeX quotes after markdown conversion.
+            parts.append(f"“{title}”.")
+        if year:
+            parts.append(f"{year}.")
+
+        if parts:
+            return " ".join(parts) + f" ({ident})"
+
+        # No descriptive metadata — keep the legacy filename-first rendering.
+        if arxiv_id:
+            return f"**{source_name}** *(arXiv:{arxiv_id})*"
         ext = source_name.rsplit(".", 1)[-1].upper() if "." in source_name else ""
         type_tag = f" *({ext})*" if ext else ""
-        return f"- **{source_name}**{type_tag}"
+        return f"**{source_name}**{type_tag}"
+
+    @classmethod
+    def _format_bib_entry(cls, num: int, source_name: str, meta: Optional[dict] = None) -> str:
+        """Return one markdown bibliography line for the given source."""
+        return f"[{num}] " + cls._compose_reference(source_name, meta)
+
+    @classmethod
+    def _format_consulted_entry(cls, source_name: str, meta: Optional[dict] = None) -> str:
+        """Return one markdown consulted-sources line (no citation number)."""
+        return "- " + cls._compose_reference(source_name, meta)
 
     # ------------------------------------------------------------------
     # Citation tagging
@@ -1606,6 +1690,7 @@ class HandcraftedGraph:
         new_lines: List[str] = []
         tagged_count = 0
         inline_count = 0
+        orphan_count = 0
 
         for line in section["content"].split("\n"):
             # Preserve headings and blank lines as-is.
@@ -1633,67 +1718,64 @@ class HandcraftedGraph:
                     inline_count += n_inline
 
                 # Then run overlap-based tagging on the (possibly updated) sentence.
-                if not chunk_refs:
-                    new_parts.append(part)
-                    continue
+                sent_tok = self._tokenize(part) if chunk_refs else frozenset()
+                if chunk_refs and len(sent_tok) >= _MIN_SENTENCE_TOKENS:
+                    # Collect matching pages grouped by source name.
+                    pages_by_src: Dict[str, List[str]] = {}
+                    for chunk_tok, src_name, page_str in chunk_refs:
+                        if len(sent_tok & chunk_tok) >= _MIN_CITATION_OVERLAP:
+                            if src_name not in pages_by_src:
+                                pages_by_src[src_name] = []
+                            if page_str and page_str not in pages_by_src[src_name]:
+                                pages_by_src[src_name].append(page_str)
 
-                sent_tok = self._tokenize(part)
-                if len(sent_tok) < _MIN_SENTENCE_TOKENS:
-                    new_parts.append(part)
-                    continue
+                    # Assign bib numbers lazily on first citation, then sort by number.
+                    for src_name in pages_by_src:
+                        if src_name not in bib_map:
+                            bib_map[src_name] = len(bib_map) + 1
 
-                # Collect matching pages grouped by source name.
-                pages_by_src: Dict[str, List[str]] = {}
-                for chunk_tok, src_name, page_str in chunk_refs:
-                    if len(sent_tok & chunk_tok) >= _MIN_CITATION_OVERLAP:
-                        if src_name not in pages_by_src:
-                            pages_by_src[src_name] = []
-                        if page_str and page_str not in pages_by_src[src_name]:
-                            pages_by_src[src_name].append(page_str)
+                    tags: List[str] = []
+                    for src_name, pages in sorted(pages_by_src.items(), key=lambda x: bib_map[x[0]]):
+                        bib_num = bib_map[src_name]
+                        if not pages:
+                            tag = f"[cite:{bib_num}]"
+                        elif len(pages) == 1:
+                            tag = f"[cite:{bib_num}, p.{pages[0]}]"
+                        else:
+                            tag = f"[cite:{bib_num}, pp.{','.join(pages)}]"
+                        # Skip if this document is already cited in this sentence.
+                        if not re.search(rf'\[cite:{bib_num}[,\]]', part):
+                            tags.append(tag)
+                            report_state.citation_counts[bib_num] = (
+                                report_state.citation_counts.get(bib_num, 0) + 1
+                            )
 
-                # Assign bib numbers lazily on first citation, then sort by number.
-                for src_name in pages_by_src:
-                    if src_name not in bib_map:
-                        bib_map[src_name] = len(bib_map) + 1
+                    if tags:
+                        # Insert tags before the trailing sentence-ending punctuation.
+                        trailing_m = re.search(r'([.!?])\s*$', part)
+                        if trailing_m:
+                            pos = trailing_m.start()
+                            part = part[:pos] + " " + " ".join(tags) + part[pos:]
+                        else:
+                            part = part.rstrip() + " " + " ".join(tags)
+                        tagged_count += len(tags)
 
-                tags: List[str] = []
-                for src_name, pages in sorted(pages_by_src.items(), key=lambda x: bib_map[x[0]]):
-                    bib_num = bib_map[src_name]
-                    if not pages:
-                        tag = f"[cite:{bib_num}]"
-                    elif len(pages) == 1:
-                        tag = f"[cite:{bib_num}, p.{pages[0]}]"
-                    else:
-                        tag = f"[cite:{bib_num}, pp.{','.join(pages)}]"
-                    # Skip if this document is already cited in this sentence.
-                    if not re.search(rf'\[cite:{bib_num}[,\]]', part):
-                        tags.append(tag)
-                        report_state.citation_counts[bib_num] = (
-                            report_state.citation_counts.get(bib_num, 0) + 1
-                        )
-
-                if tags:
-                    # Insert tags before the trailing sentence-ending punctuation.
-                    trailing_m = re.search(r'([.!?])\s*$', part)
-                    if trailing_m:
-                        pos = trailing_m.start()
-                        new_parts.append(
-                            part[:pos] + " " + " ".join(tags) + part[pos:]
-                        )
-                    else:
-                        new_parts.append(part.rstrip() + " " + " ".join(tags))
-                    tagged_count += len(tags)
-                else:
-                    new_parts.append(part)
+                # Finally drop stray numeric reference markers (e.g. "Ref. [32]")
+                # the model copied from a source chunk that don't correspond to a
+                # [cite:N] tag applied to this sentence.
+                part, n_orphan = self._strip_orphan_citation_markers(part)
+                orphan_count += n_orphan
+                new_parts.append(part)
 
             new_lines.append("".join(new_parts))
 
-        if tagged_count > 0 or inline_count > 0:
+        if tagged_count > 0 or inline_count > 0 or orphan_count > 0:
             report_state.replace_section(section["id"], "\n".join(new_lines))
             logger.info(
                 f"[{self.id}] Section {section_idx + 1}: "
                 f"{tagged_count} citation tag(s) inserted, "
-                f"{inline_count} inline reference(s) rewritten."
+                f"{inline_count} inline reference(s) rewritten, "
+                f"{orphan_count} stray marker(s) removed."
             )
         else:
             logger.info(
@@ -1710,8 +1792,10 @@ class HandcraftedGraph:
     ) -> Tuple[str, int]:
         """Rewrite inline source references in one sentence into citation tags.
 
-        Handles bracketed forms (``[file.pdf | Page: 26]``), ``Source file.pdf
-        (Page 2)`` prose, and bare ``(file.pdf)`` mentions. Only references whose
+        Handles bracketed forms (``[file.pdf | Page: 26]`` and the
+        ``[Source: file.pdf | Page: 26]`` variant with an inline ``Source:``
+        prefix), ``Source file.pdf (Page 2)`` prose, and bare ``(file.pdf)``
+        mentions. Only references whose
         filename resolves to a known source are rewritten; unknown filenames are
         left untouched. Bib numbers are assigned lazily (matching the overlap
         pass) and ``citation_counts`` is updated per new tag. At most one tag is
@@ -1761,6 +1845,33 @@ class HandcraftedGraph:
         if n:
             # Tidy whitespace / empty parens left by removed references.
             out = re.sub(r'\(\s*\)', '', out)
+            out = re.sub(r'[ \t]{2,}', ' ', out)
+            out = re.sub(r'\s+([.,;:])', r'\1', out)
+        return out, n
+
+    def _strip_orphan_citation_markers(self, text: str) -> Tuple[str, int]:
+        """Remove stray bare numeric reference markers from a sentence.
+
+        The model occasionally copies a bracketed reference marker straight out
+        of a retrieved chunk (e.g. ``Ref. [32]``), where the number indexes that
+        source's own reference list rather than this report's bibliography. The
+        report only ever cites sources with ``[cite:N, p.X]`` tags, so a bare
+        ``[N]`` marker is never a valid citation — it is always dropped to keep a
+        consistent format and avoid duplicated references. Real ``[cite:N, p.X]``
+        tags are not matched by the marker pattern, so they are left untouched.
+
+        Returns ``(new_text, n_removed)``.
+        """
+        n = 0
+
+        def _repl(m: "re.Match") -> str:
+            nonlocal n
+            n += 1
+            return ""
+
+        out = _ORPHAN_CITE_RE.sub(_repl, text)
+        if n:
+            # Tidy whitespace left where markers were removed.
             out = re.sub(r'[ \t]{2,}', ' ', out)
             out = re.sub(r'\s+([.,;:])', r'\1', out)
         return out, n

@@ -84,11 +84,20 @@ async def run_handcrafted(
 
     logger.info(f"Starting handcrafted run | task='{task[:80]}...' | llm={llm_name}")
 
-    answers, total_tokens = await graph.arun(
-        input={"task": task},
-        max_tries=max_tries,
-        max_time=max_time,
-    )
+    try:
+        answers, total_tokens = await graph.arun(
+            input={"task": task},
+            max_tries=max_tries,
+            max_time=max_time,
+        )
+    finally:
+        # Persist the trace even when arun raises (e.g. NoCorpusCoverageError or
+        # an unexpected crash). The trace is the primary debugging artefact, so it
+        # must survive failed runs — otherwise the saved file is always a stale
+        # leftover from the last successful run.
+        if execution_trace:
+            from utils.globals import ExecutionTrace
+            ExecutionTrace.instance().save_trace("handcrafted_trace.json")
 
     # Strip pipeline-internal meta-commentary from the final output.
     # The execution trace is left unfiltered for debugging.
@@ -122,10 +131,6 @@ async def run_handcrafted(
         print(f"\nReport saved to: {run_dir}")
         if pdf_path is not None:
             print(f"PDF: {pdf_path}")
-
-    if execution_trace:
-        from utils.globals import ExecutionTrace
-        ExecutionTrace.instance().save_trace("handcrafted_trace.json")
 
     return answers, total_tokens
 

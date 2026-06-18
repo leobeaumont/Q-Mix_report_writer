@@ -115,6 +115,38 @@ _GREEK_MAP = {
 _DISPLAY_MATH_RE = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
 # Inline math span: $...$ with no embedded $.
 _MATH_RE = re.compile(r"\$[^$]+\$")
+
+# A single subscript/superscript "atom": a braced group, a TeX command, or one
+# non-space character. Used to detect and merge illegal double scripts.
+_SCRIPT_ATOM = r"(?:\{[^{}]*\}|\\[a-zA-Z]+\*?|[^\s_^{}])"
+# Two consecutive scripts of the *same* type on one atom (e.g. ``m_0_q`` or
+# ``x^a^b``) — TeX rejects these as "Double subscript/superscript".
+_DOUBLE_SCRIPT_RE = re.compile(r"(?<!\\)([_^])(" + _SCRIPT_ATOM + r")\1(" + _SCRIPT_ATOM + r")")
+
+
+def _unbrace(atom: str) -> str:
+    """Strip one layer of surrounding braces from a script atom, if present."""
+    if len(atom) >= 2 and atom[0] == "{" and atom[-1] == "}":
+        return atom[1:-1]
+    return atom
+
+
+def _fix_double_scripts(math: str) -> str:
+    """Merge illegal consecutive same-type scripts into a single braced group.
+
+    The pipeline's LLM occasionally emits ``m_0_q`` (two subscripts on one atom),
+    which halts TeX with a "Double subscript" error. This collapses such runs to
+    ``m_{0 q}`` (and the superscript analogue), iterating so triple+ runs are
+    handled too. Math is otherwise preserved verbatim.
+    """
+    prev = None
+    while prev != math:
+        prev = math
+        math = _DOUBLE_SCRIPT_RE.sub(
+            lambda m: f"{m.group(1)}{{{_unbrace(m.group(2))} {_unbrace(m.group(3))}}}",
+            math,
+        )
+    return math
 # Inline equations longer than this many characters of source are promoted to a
 # display equation (broken onto their own line at full size). \fitmath only
 # shrinks them further if they are still wider than a full text line.
@@ -166,17 +198,16 @@ def convert_inline(text: str) -> str:
         return token
 
     def _render_display(m: "re.Match") -> str:
-        inner = m.group(1).strip()
+        inner = _fix_double_scripts(m.group(1).strip())
         if len(inner) > _LONG_MATH_THRESHOLD:
             return _stash(f"\\fitmath{{{inner}}}", "M")
         return _stash(f"\\[{inner}\\]", "M")
 
     def _render_math(m: "re.Match") -> str:
-        span = m.group()
-        inner = span[1:-1]  # strip the $ delimiters
+        inner = _fix_double_scripts(m.group()[1:-1])  # strip the $ delimiters
         if len(inner) > _LONG_MATH_THRESHOLD:
             return _stash(f"\\fitmath{{{inner}}}", "M")
-        return _stash(span, "M")
+        return _stash(f"${inner}$", "M")
 
     # Display math ($$...$$) first, so its dollar pairs are consumed before the
     # inline pass — otherwise stray $ desynchronise all later inline matching.
@@ -303,14 +334,12 @@ def convert_blocks(text: str) -> str:
 _COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
 _QUERY_RE = re.compile(r"Query:\s*(.+)")
 _GENERATED_RE = re.compile(r"Generated:\s*(.+)")
-# Bibliography entry: [N] **filename** *(arXiv:id)* *(k citations)*
-_BIB_ENTRY_RE = re.compile(
-    r"^\[(\d+)\]\s*\*\*(.+?)\*\*\s*(?:\*\(arXiv:([^)]+)\)\*)?", re.MULTILINE
-)
-# Consulted entry: - **filename** *(arXiv:id)*
-_CONSULTED_RE = re.compile(
-    r"^-\s*\*\*(.+?)\*\*\s*(?:\*\(arXiv:([^)]+)\)\*)?", re.MULTILINE
-)
+# A cited bibliography entry is any line opening with ``[N]``; a consulted entry
+# any line opening with ``-``. The remainder is the reference body (author /
+# title / year / identifier markdown), rendered through convert_inline so the
+# parser stays decoupled from the exact reference layout produced upstream.
+_BIB_ENTRY_RE = re.compile(r"^\[(\d+)\]\s+(.*\S)\s*$", re.MULTILINE)
+_CONSULTED_RE = re.compile(r"^-\s+(.*\S)\s*$", re.MULTILINE)
 
 
 def _extract_metadata(md_text: str) -> Dict[str, str]:
@@ -351,12 +380,14 @@ def _split_sections(body_md: str) -> Tuple[str, List[Tuple[str, str]]]:
     return lead, sections
 
 
-def _parse_bibliography(bib_region: str) -> Tuple[List[Tuple[str, str, str]], List[Tuple[str, str]]]:
+def _parse_bibliography(bib_region: str) -> Tuple[List[Tuple[str, str]], List[str]]:
     """Parse the bibliography region into cited entries and consulted sources.
 
     Returns (cited, consulted) where:
-      cited     = [(number, filename, arxiv_id), ...]
-      consulted = [(filename, arxiv_id), ...]
+      cited     = [(number, reference_markdown), ...]
+      consulted = [reference_markdown, ...]
+    The reference markdown is whatever the pipeline rendered after the ``[N]`` /
+    ``-`` marker; it is converted to LaTeX at render time.
     """
     if not bib_region:
         return [], []
@@ -366,14 +397,8 @@ def _parse_bibliography(bib_region: str) -> Tuple[List[Tuple[str, str, str]], Li
     cited_text = bib_region[: m.start()] if m else bib_region
     consulted_text = bib_region[m.end():] if m else ""
 
-    cited = [
-        (num, filename, arxiv or "")
-        for num, filename, arxiv in _BIB_ENTRY_RE.findall(cited_text)
-    ]
-    consulted = [
-        (filename, arxiv or "")
-        for filename, arxiv in _CONSULTED_RE.findall(consulted_text)
-    ]
+    cited = [(num, body.strip()) for num, body in _BIB_ENTRY_RE.findall(cited_text)]
+    consulted = [body.strip() for body in _CONSULTED_RE.findall(consulted_text)]
     return cited, consulted
 
 
@@ -381,32 +406,36 @@ def _parse_bibliography(bib_region: str) -> Tuple[List[Tuple[str, str, str]], Li
 # LaTeX rendering
 # ---------------------------------------------------------------------------
 
-def _arxiv_render(filename: str, arxiv_id: str) -> str:
-    """Render one source as ``\\textbf{file} \\textit{(arXiv:id)}`` with a link.
-
-    The filename is set in dark purple; the arXiv link inherits the lavender
-    ``urlcolor`` from hyperref so sources read as a coherent branded block.
-    """
-    entry = f"\\textbf{{\\textcolor{{sckpurple}}{{{_escape_latex(filename)}}}}}"
-    if arxiv_id:
-        url = f"https://arxiv.org/abs/{arxiv_id}"
-        entry += f" \\textit{{(\\href{{{url}}}{{arXiv:{_escape_latex(arxiv_id)}}})}}"
-    return entry
+# arXiv ids as they survive convert_inline (``arXiv:2606.14166`` / ``arXiv:0405013``).
+_ARXIV_LINK_RE = re.compile(r"arXiv:([0-9A-Za-z][0-9A-Za-z./\-]*)")
 
 
-def _render_bibliography(cited: List[Tuple[str, str, str]]) -> str:
+def _linkify_arxiv(latex_text: str) -> str:
+    """Turn any ``arXiv:ID`` mention into a hyperlink (lavender via urlcolor)."""
+    return _ARXIV_LINK_RE.sub(
+        lambda m: f"\\href{{https://arxiv.org/abs/{m.group(1)}}}{{arXiv:{m.group(1)}}}",
+        latex_text,
+    )
+
+
+def _render_reference_body(body_md: str) -> str:
+    """Render one reference's markdown body (author/title/year/id) to LaTeX."""
+    return _linkify_arxiv(convert_inline(body_md))
+
+
+def _render_bibliography(cited: List[Tuple[str, str]]) -> str:
     if not cited:
         return ""
     lines = [r"\begin{thebibliography}{99}"]
-    for num, filename, arxiv in cited:
+    for num, body in cited:
         # Lavender entry label, e.g. [3], to match the brand palette.
         label = f"{{\\textcolor{{scklavender}}{{{num}}}}}"
-        lines.append(f"\\bibitem[{label}]{{src{num}}} {_arxiv_render(filename, arxiv)}")
+        lines.append(f"\\bibitem[{label}]{{src{num}}} {_render_reference_body(body)}")
     lines.append(r"\end{thebibliography}")
     return "\n".join(lines)
 
 
-def _render_consulted(consulted: List[Tuple[str, str]]) -> str:
+def _render_consulted(consulted: List[str]) -> str:
     if not consulted:
         return ""
     lines = [
@@ -414,8 +443,8 @@ def _render_consulted(consulted: List[Tuple[str, str]]) -> str:
         r"\addcontentsline{toc}{section}{Consulted Sources}",
         r"\begin{itemize}",
     ]
-    for filename, arxiv in consulted:
-        lines.append(r"  \item " + _arxiv_render(filename, arxiv))
+    for body in consulted:
+        lines.append(r"  \item " + _render_reference_body(body))
     lines.append(r"\end{itemize}")
     return "\n".join(lines)
 

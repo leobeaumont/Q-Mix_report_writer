@@ -31,6 +31,226 @@ _PAGE_MARKER_RE = re.compile(r"\[PAGE (\d+)\]")
 # The embedding input is truncated to this length; stored chunk text is never truncated.
 _EMBED_MAX_CHARS = 2900
 
+# Bibliographic-metadata extraction (best effort, source-agnostic).
+#
+# Design rule: prefer no value over a wrong one. Embedded document-info is
+# trusted (after junk filtering); first-page heuristics only fill the gaps it
+# leaves and bail out to "" whenever they are not confident.
+import datetime as _datetime
+
+# Plausible publication-year window. Future years (e.g. an OCR'd "2072") and
+# absurdly old ones are rejected so a stray number never becomes the year.
+_MIN_YEAR = 1900
+_MAX_YEAR = _datetime.date.today().year + 1
+# A standalone 4-digit year (not embedded in a longer number).
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
+
+# Lines that can never be a title (arXiv stamp, emails, URLs, bare numbers).
+_TITLE_REJECT_RE = re.compile(
+    r"(?:^arxiv[:\s]|@|https?://|www\.|^\d+$|preprint|submitted to|^doi[:\s])",
+    re.IGNORECASE,
+)
+# Lowercase function words that mark a line as prose (i.e. a title), so it must
+# not be mistaken for an author list. "and" is excluded because it also joins
+# authors ("Smith and Jones").
+_PROSE_WORDS = frozenset(
+    "a an the of for with in on to from via using into under over between "
+    "through toward towards is are we this that at by as it its their our".split()
+)
+# Author-line affiliation noise: superscript/footnote marks and digits.
+_AFFIL_NOISE_RE = re.compile(r"[\d∗*†‡§¶•◦]+")
+# Obvious junk values seen in embedded document-info.
+_JUNK_TITLE_RE = re.compile(
+    r"(microsoft word|powerpoint|\.docx?|\.tex|\.dvi|\.pdf|\.indd|untitled|"
+    r"^report$|^document$|^title$|^paper$)",
+    re.IGNORECASE,
+)
+_JUNK_AUTHOR_RE = re.compile(
+    r"(administrator|^user$|^owner$|^admin$|microsoft|adobe|pdflatex|latex|"
+    r"acrobat|writer|default|unknown)",
+    re.IGNORECASE,
+)
+
+
+def _clean_meta_value(value) -> str:
+    """Normalise a raw metadata string (docinfo or heuristic) for storage."""
+    if value is None:
+        return ""
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    # Collapse runs of whitespace introduced by line joins.
+    text = re.sub(r"\s+", " ", text)
+    return text[:300]
+
+
+def _valid_year(value: str) -> str:
+    """Return the year string if it falls inside the plausible window, else ""."""
+    if value and value.isdigit() and _MIN_YEAR <= int(value) <= _MAX_YEAR:
+        return value
+    return ""
+
+
+def _year_from_pdf_date(raw) -> str:
+    """Extract a plausible 4-digit year from a PDF /CreationDate ('D:20210512...')."""
+    if not raw:
+        return ""
+    m = re.search(r"D:(\d{4})", str(raw))
+    if m:
+        return _valid_year(m.group(1))
+    m = _YEAR_RE.search(str(raw))
+    return _valid_year(m.group(0)) if m else ""
+
+
+def _first_page_lines(text: str) -> List[str]:
+    """Return the non-empty lines of the first page (before the [PAGE 2] marker)."""
+    cut = text
+    second = re.search(r"\[PAGE 2\]", text)
+    if second:
+        cut = text[: second.start()]
+    lines = []
+    for raw in cut.splitlines():
+        line = raw.strip()
+        if not line or _PAGE_MARKER_RE.fullmatch(line):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _looks_like_title(line: str) -> bool:
+    """A line that confidently holds a document title (prose, not an id/code).
+
+    Requires several real words and a prose-like letter mix, which rejects
+    report numbers ("YITP-10-28, TKYNT-10-06"), ALL-CAPS banners and
+    digit-heavy identifiers.
+    """
+    if not (15 <= len(line) <= 250) or _TITLE_REJECT_RE.search(line):
+        return False
+    if len(line.split()) < 3:
+        return False
+    letters = [c for c in line if c.isalpha()]
+    if len(letters) < 10:
+        return False
+    # Titles are mostly lowercase prose; codes/banners are not.
+    if sum(c.islower() for c in letters) / len(letters) < 0.45:
+        return False
+    # Reject digit-dominated lines (identifiers, dates, tabular headers).
+    if sum(c.isdigit() for c in line) / len(line) > 0.2:
+        return False
+    return True
+
+
+def _clean_author_line(line: str) -> str:
+    """Strip affiliation marks/digits and tidy separators from an author line."""
+    cleaned = _AFFIL_NOISE_RE.sub(" ", line)
+    cleaned = re.sub(r"\s*,\s*(?=and\b|&)", " ", cleaned)  # spurious comma before "and"
+    cleaned = re.sub(r"\s+([,;])", r"\1", cleaned)         # space before separator
+    cleaned = re.sub(r"([,;])(?=[,;])", "", cleaned)       # collapse repeated separators
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip(" ,;.")
+
+
+def _looks_like_authors(line: str) -> bool:
+    """A line that confidently holds an author list (person names, not prose)."""
+    cleaned = _clean_author_line(line)
+    if not (3 <= len(cleaned) <= 200) or _TITLE_REJECT_RE.search(cleaned):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z.'\-]*", cleaned)
+    if len(words) < 2:
+        return False
+    # Any prose function word means this is a title/sentence, not names.
+    if any(w.lower() in _PROSE_WORDS for w in words):
+        return False
+    # The bulk of tokens must look like names (capitalised words or initials).
+    namelike = [w for w in words if w[:1].isupper() or (len(w) <= 2 and w[0].isalpha())]
+    caps = [w for w in words if w[:1].isupper()]
+    return len(caps) >= 2 and len(namelike) / len(words) >= 0.7
+
+
+def _heuristic_metadata(text: str) -> Tuple[str, str, str]:
+    """Best-effort (title, author, year) parsed from first-page text.
+
+    Conservative by design: returns "" for any field it cannot infer confidently.
+    Used only to fill gaps left by embedded document-info metadata.
+    """
+    lines = _first_page_lines(text)
+    title = author = ""
+    title_idx = -1
+    for i, line in enumerate(lines[:15]):
+        if _looks_like_title(line):
+            title = line
+            title_idx = i
+            # Stitch an immediately wrapped second title line, but never absorb a
+            # line that reads like an author list (a common cause of bad titles).
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if (
+                nxt
+                and _looks_like_title(nxt)
+                and not _looks_like_authors(nxt)
+                and len(nxt) < 120
+                and not title.endswith((".", ":", "?"))
+            ):
+                title = f"{title} {nxt}"
+            break
+    if title_idx >= 0:
+        for line in lines[title_idx + 1: title_idx + 4]:
+            if line == title or line in title:
+                continue
+            if _looks_like_authors(line):
+                author = _clean_author_line(line)
+                break
+    # Year: only from the first page, and only inside the plausible window.
+    year = ""
+    for m in _YEAR_RE.finditer("\n".join(lines)):
+        year = _valid_year(m.group(0))
+        if year:
+            break
+    return title, author, year
+
+
+def _extract_bibliographic_metadata(path: Path, reader_or_doc, text: str) -> Dict[str, str]:
+    """Resolve title/author/year: embedded document-info first, heuristics to fill gaps.
+
+    `reader_or_doc` is the already-opened pypdf PdfReader or python-docx Document
+    (None for plain text). Embedded values are junk-filtered; first-page
+    heuristics only fill what is still missing. Only non-empty fields are
+    returned, so callers can add them straight into ChromaDB metadata (which
+    rejects None values).
+    """
+    title = author = year = ""
+    suffix = path.suffix.lower()
+
+    if suffix == ".pdf" and reader_or_doc is not None:
+        info = reader_or_doc.metadata or {}
+        title = _clean_meta_value(info.get("/Title"))
+        author = _clean_meta_value(info.get("/Author"))
+        year = _year_from_pdf_date(info.get("/CreationDate"))
+    elif suffix == ".docx" and reader_or_doc is not None:
+        props = reader_or_doc.core_properties
+        title = _clean_meta_value(getattr(props, "title", ""))
+        author = _clean_meta_value(getattr(props, "author", ""))
+        created = getattr(props, "created", None)
+        year = _valid_year(str(created.year)) if created else ""
+
+    # Discard obvious docinfo junk so heuristics (or nothing) take over.
+    if title and (_JUNK_TITLE_RE.search(title) or not (4 <= len(title) <= 300)):
+        title = ""
+    if author and (_JUNK_AUTHOR_RE.search(author) or len(author) < 3):
+        author = ""
+
+    if not (title and author and year):
+        h_title, h_author, h_year = _heuristic_metadata(text)
+        title = title or h_title
+        author = author or h_author
+        year = year or h_year
+
+    out: Dict[str, str] = {}
+    if title:
+        out["title"] = title
+    if author:
+        out["author"] = author
+    if year:
+        out["year"] = year
+    return out
+
 
 def _get_ollama_base_url() -> str:
     """Read the Ollama base URL from default.yaml (same path as ollama_chat.py)."""
@@ -46,31 +266,35 @@ def _load_text_from_file(file_path: str) -> Tuple[str, Dict[str, str]]:
         raise FileNotFoundError(f"File not found: {file_path}")
 
     metadata = {"source_name": path.name, "file_type": path.suffix.lower()}
+    reader_or_doc = None
 
     if path.suffix.lower() == ".pdf":
         if PdfReader is None:
             raise ImportError("pypdf is required for PDF support. Install with: pip install pypdf")
         reader = PdfReader(file_path)
+        reader_or_doc = reader
         text = ""
         for page_num, page in enumerate(reader.pages):
             text += f"\n[PAGE {page_num + 1}]\n"
             text += page.extract_text()
-        return text, metadata
 
     elif path.suffix.lower() == ".docx":
         if Document is None:
             raise ImportError("python-docx is required for DOCX support. Install with: pip install python-docx")
         doc = Document(file_path)
+        reader_or_doc = doc
         text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
-        return text, metadata
 
     elif path.suffix.lower() in [".txt", ".md"]:
         with open(file_path, "r", encoding="utf-8") as f:
             text = f.read()
-        return text, metadata
 
     else:
         raise ValueError(f"Unsupported file type: {path.suffix}. Supported: .pdf, .docx, .txt, .md")
+
+    # Resolve bibliographic metadata (title/author/year) for the bibliography.
+    metadata.update(_extract_bibliographic_metadata(path, reader_or_doc, text))
+    return text, metadata
 
 
 def _chunk_text(text: str, chunk_size: int = 512, overlap: int = 50) -> List[str]:
@@ -193,6 +417,9 @@ class RAGManager:
                 "content": self._bm25_texts[i],
                 "source": self._bm25_metas[i].get("source_name", "Unknown Source"),
                 "page": self._bm25_metas[i].get("page_number", "N/A"),
+                "title": self._bm25_metas[i].get("title", ""),
+                "author": self._bm25_metas[i].get("author", ""),
+                "year": self._bm25_metas[i].get("year", ""),
                 "distance": None,
                 "bm25_score": round(float(scores[i]), 4),
                 "id": self._bm25_ids[i],
@@ -303,6 +530,9 @@ class RAGManager:
                 "content": doc,
                 "source": meta.get("source_name", "Unknown Source"),
                 "page": meta.get("page_number", "N/A"),
+                "title": meta.get("title", ""),
+                "author": meta.get("author", ""),
+                "year": meta.get("year", ""),
                 "distance": round(dist, 4),
                 "id": chunk_id,
             }
@@ -462,6 +692,9 @@ class RAGManager:
         source_name = base_metadata["source_name"]
         file_type = base_metadata["file_type"]
         is_pdf = file_type == ".pdf"
+        # Bibliographic fields resolved at load time, replicated onto every chunk
+        # so they survive retrieval and reach the bibliography builder.
+        bib_fields = {k: base_metadata[k] for k in ("title", "author", "year") if k in base_metadata}
 
         documents = []
         metadatas = []
@@ -480,6 +713,7 @@ class RAGManager:
                 "file_type": file_type,
                 "chunk_index": idx,
                 "total_chunks": len(chunks),
+                **bib_fields,
             }
             if is_pdf:
                 chunk_metadata["page_number"] = current_page

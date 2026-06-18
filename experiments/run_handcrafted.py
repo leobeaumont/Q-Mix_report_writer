@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets.tasks import tasks
 from handcrafted_graph.runner import run_handcrafted
+from handcrafted_graph.graph import NoCorpusCoverageError
 from handcrafted_graph.scheduler import SkipStrategy
 from utils.globals import ExecutionTrace, ReportState
 from utils.config import get_config
@@ -68,16 +69,27 @@ def main():
     print("=" * 60)
     print()
 
-    answers, total_tokens = asyncio.run(
-        run_handcrafted(
-            task=task,
-            llm_name=llm_name,
-            skip_strategy=SkipStrategy(args.skip_strategy),
-            execution_trace=args.trace,
-            max_tries=args.max_tries,
-            max_time=args.max_time,
+    try:
+        answers, total_tokens = asyncio.run(
+            run_handcrafted(
+                task=task,
+                llm_name=llm_name,
+                skip_strategy=SkipStrategy(args.skip_strategy),
+                execution_trace=args.trace,
+                max_tries=args.max_tries,
+                max_time=args.max_time,
+            )
         )
-    )
+    except NoCorpusCoverageError as exc:
+        print()
+        print("=" * 60)
+        print("  ABORTED — no corpus coverage for this task")
+        print("=" * 60)
+        print(f"  {exc}")
+        if args.trace:
+            print("\n  Execution trace saved to: handcrafted_trace.json")
+        print("=" * 60)
+        sys.exit(2)
 
     report = answers[0]
     progress = ReportState.instance().progress
