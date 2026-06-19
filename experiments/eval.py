@@ -2,10 +2,10 @@ import numpy as np
 import json
 import re
 
-from utils.globals import ReportState, Score
-from utils.config import get_llm
-from utils.utils import safe_json_parse
-from prompt.prompt_set_registry import PromptSetRegistry
+from qmix_report_writer.utils.globals import ReportState, Score
+from qmix_report_writer.utils.config import get_llm
+from qmix_report_writer.utils.utils import safe_json_parse
+from qmix_report_writer.prompt.prompt_set_registry import PromptSetRegistry
 
 def length_score(target, sigma) -> float:
     """Score the length of the production between 0 and 1."""

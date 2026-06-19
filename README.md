@@ -64,18 +64,55 @@ Pre-trained QMIX checkpoints and evaluation results from our runs are included i
 
 ## Project Structure
 
+The library code is an installable Python package, `qmix_report_writer/`, so it
+can be embedded in a host project (`pip install` + `from qmix_report_writer import
+run_handcrafted`). Development entry points, tests and runtime data live at the
+repo root, outside the package.
+
 ```
-agent_q_mix/
-├── qmix/                    # QMIX core (GNN, Q-networks, mixing, replay, trainer)
-├── graph/                   # Multi-agent graph execution engine
-├── agents/                  # Agent types (MathSolver, CodeWriter, etc.)
-├── llm/                     # LLM API layer (GPT, DeepSeek, Qwen)
-├── prompt/                  # Domain-specific prompt sets
-├── datasets/                # Benchmark dataset loaders
-├── experiments/             # Training and evaluation scripts
-├── scripts/                 # Shell scripts for training + evaluation
-└── checkpoints/             # Saved QMIX models
+Q-Mix_report_writer/             # repo root
+├── qmix_report_writer/          # ── installable package ──────────────────
+│   ├── __init__.py              # public API (re-exports run_handcrafted)
+│   ├── handcrafted_graph/       # deterministic phase-based pipeline (+ runner)
+│   ├── qmix/                    # QMIX core (GNN, Q-networks, mixing, replay, trainer)
+│   ├── graph/                   # multi-agent graph execution engine
+│   ├── agents/                  # agent roster (LeadArchitect, Researcher, ...)
+│   ├── llm/                     # LLM API layer (Ollama)
+│   ├── prompt/                  # prompt sets
+│   ├── tools/rag/               # RAG manager (ChromaDB + hybrid retrieval)
+│   ├── utils/                   # config/paths, report export, PDF, visualization
+│   ├── configs/                 # bundled default.yaml (defaults; host-overridable)
+│   └── assets/                  # images used by the PDF/LaTeX template
+├── experiments/                 # training and evaluation entry points
+├── scripts/                     # ingestion / query utilities
+├── datasets/                    # benchmark dataset loaders
+├── tests/                       # test suite
+├── checkpoints/                 # saved QMIX models
+├── pyproject.toml               # package definition + dependencies
+├── requirements.txt
+└── (git-ignored runtime data: chroma_data/, output/, .tools/, *_trace.json)
 ```
+
+### Configuration & data paths
+
+`configs/default.yaml` ships inside the package as the built-in defaults. A host
+overrides it without editing package files via `configure()`, a YAML override
+file (`QMIX_REPORT_CONFIG`), or in-code overrides:
+
+```python
+from qmix_report_writer.utils.config import configure
+configure(overrides={"paths": {"output_root": "qmix_report_writer_data"}})
+```
+
+Runtime locations resolve against two independent, configurable roots (both
+default to the current working directory, so standalone use is unchanged):
+
+- **data root** (`paths.data_root` / `QMIX_REPORT_DATA_ROOT`) — *used* resources:
+  the Chroma DB (`chroma_path`) and the Tectonic cache (`tools_dir`).
+- **output root** (`paths.output_root` / `QMIX_REPORT_OUTPUT_ROOT`) — files the
+  pipeline *produces*: report runs (`output_dir`) and execution traces
+  (`trace_file`). A host typically sets only this to group generated artifacts in
+  one folder, leaving the DB in place.
 
 ## Adaptation for report writing
 

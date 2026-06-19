@@ -45,7 +45,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 os.chdir(PROJECT_ROOT)
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.rag import RAGManager
+from qmix_report_writer.tools.rag import RAGManager
 
 # ── Constants ────────────────────────────────────────────────────────────────
 PROGRESS_FILE = PROJECT_ROOT / "scripts" / "arxiv_ingest_progress.json"

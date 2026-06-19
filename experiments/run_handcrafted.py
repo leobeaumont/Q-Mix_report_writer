@@ -25,11 +25,11 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets.tasks import tasks
-from handcrafted_graph.runner import run_handcrafted
-from handcrafted_graph.graph import NoCorpusCoverageError
-from handcrafted_graph.scheduler import SkipStrategy
-from utils.globals import ExecutionTrace, ReportState
-from utils.config import get_config
+from qmix_report_writer.handcrafted_graph.runner import run_handcrafted
+from qmix_report_writer.handcrafted_graph.graph import NoCorpusCoverageError
+from qmix_report_writer.handcrafted_graph.scheduler import SkipStrategy
+from qmix_report_writer.utils.globals import ExecutionTrace, ReportState
+from qmix_report_writer.utils.config import get_config
 
 
 def main():

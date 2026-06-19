@@ -10,10 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, ".")
 
-from utils.globals import ReportState, SourceBuffer
-from handcrafted_graph.state import PhaseState
-from handcrafted_graph.phases import PhaseType
-from agents.collector import Collector
+from qmix_report_writer.utils.globals import ReportState, SourceBuffer
+from qmix_report_writer.handcrafted_graph.state import PhaseState
+from qmix_report_writer.handcrafted_graph.phases import PhaseType
+from qmix_report_writer.agents.collector import Collector
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ def _make_collector(llm_responses: list[str]) -> Collector:
     col.source_buffer = SourceBuffer.instance()
 
     # Pull prompt_set from the real registry so context-block injection works.
-    from prompt.prompt_set_registry import PromptSetRegistry
+    from qmix_report_writer.prompt.prompt_set_registry import PromptSetRegistry
     col.prompt_set = PromptSetRegistry.get("redacting")
     col.role = "Collector"
 

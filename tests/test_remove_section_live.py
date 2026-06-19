@@ -28,10 +28,10 @@ import urllib.request
 
 sys.path.insert(0, ".")
 
-from utils.globals import ReportState, SourceBuffer
-from utils.config import get_llm_config
-from handcrafted_graph.state import PhaseState
-from handcrafted_graph.phases import PhaseType
+from qmix_report_writer.utils.globals import ReportState, SourceBuffer
+from qmix_report_writer.utils.config import get_llm_config
+from qmix_report_writer.handcrafted_graph.state import PhaseState
+from qmix_report_writer.handcrafted_graph.phases import PhaseType
 
 TRIALS = 3
 
@@ -83,7 +83,7 @@ def _set_section_review_remove(section_idx: int):
 
 async def _run_one_trial(trial: int):
     """Returns (removed: bool, raw_response: str)."""
-    from agents.collector import Collector  # real LLM via get_llm()
+    from qmix_report_writer.agents.collector import Collector  # real LLM via get_llm()
 
     _reset_singletons()
     _seed_duplicate_report()
@@ -95,7 +95,7 @@ async def _run_one_trial(trial: int):
     # Collector.__init__ defaults to "redacting", which does NOT inject the
     # REVISION DIRECTIVE / [REMOVE_SECTION] instruction — only "handcrafted_redacting"
     # does. Match the real pipeline or the model never sees the removal directive.
-    from prompt.prompt_set_registry import PromptSetRegistry
+    from qmix_report_writer.prompt.prompt_set_registry import PromptSetRegistry
     col.prompt_set = PromptSetRegistry.get("handcrafted_redacting")
     raw = await col._async_execute({"task": "Remove duplicated section"}, {}, {})
 

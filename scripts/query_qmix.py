@@ -15,9 +15,9 @@ import torch
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
-from graph.graph import QMIXGraph
-from qmix.qmix_trainer import QMIXTrainer
-from utils.config import get_config
+from qmix_report_writer.graph.graph import QMIXGraph
+from qmix_report_writer.qmix.qmix_trainer import QMIXTrainer
+from qmix_report_writer.utils.config import get_config
 
 # ── Dimension helpers ─────────────────────────────────────────────────────────
 # Derived directly from QMIXGraph.get_observation_features() in graph/graph.py:

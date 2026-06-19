@@ -114,7 +114,7 @@ class LiveCodeBenchTestGenDataset(BaseDataset):
 
     def evaluate(self, prediction, ground_truth):
         """Run prediction code against test cases. Returns fraction of tests passed."""
-        from utils.code_extract import extract_code
+        from qmix_report_writer.utils.code_extract import extract_code
         code = extract_code(prediction)
         if not code:
             return 0.0

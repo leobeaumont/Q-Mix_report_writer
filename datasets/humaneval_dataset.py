@@ -52,7 +52,7 @@ class HumanEvalDataset(BaseDataset):
 
     def evaluate(self, prediction: str, ground_truth: str) -> float:
         """Execute code with HumanEval test cases. Returns 1.0 (pass) or 0.0 (fail)."""
-        from utils.code_extract import extract_code
+        from qmix_report_writer.utils.code_extract import extract_code
         code = extract_code(prediction)
         if not code:
             return 0.0

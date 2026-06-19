@@ -3,7 +3,7 @@ import asyncio
 import numpy as np
 from datetime import datetime
 
-from utils.globals import ReportState, Score
+from qmix_report_writer.utils.globals import ReportState, Score
 from experiments.eval import report_score, length_score
 
 def extract_and_chunk(pdf_path, chunk_size=1000):

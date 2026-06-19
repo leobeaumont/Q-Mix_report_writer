@@ -19,12 +19,12 @@ sys.path.insert(0, ".")
 
 from unittest.mock import AsyncMock, MagicMock
 
-from utils.globals import ReportState, SourceBuffer
-from handcrafted_graph.state import PhaseState
-from handcrafted_graph.phases import PhaseType
-from handcrafted_graph.graph import HandcraftedGraph, _REMOVAL_REQUEST_RE
-from agents.collector import Collector
-from llm.ollama_chat import _trim_truncated_tail
+from qmix_report_writer.utils.globals import ReportState, SourceBuffer
+from qmix_report_writer.handcrafted_graph.state import PhaseState
+from qmix_report_writer.handcrafted_graph.phases import PhaseType
+from qmix_report_writer.handcrafted_graph.graph import HandcraftedGraph, _REMOVAL_REQUEST_RE
+from qmix_report_writer.agents.collector import Collector
+from qmix_report_writer.llm.ollama_chat import _trim_truncated_tail
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ def _make_collector(llm_responses: list[str]) -> Collector:
     col.report = ReportState.instance()
     col.source_buffer = SourceBuffer.instance()
 
-    from prompt.prompt_set_registry import PromptSetRegistry
+    from qmix_report_writer.prompt.prompt_set_registry import PromptSetRegistry
     col.prompt_set = PromptSetRegistry.get("redacting")
     col.role = "Collector"
 

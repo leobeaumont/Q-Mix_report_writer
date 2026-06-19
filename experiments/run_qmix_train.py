@@ -24,14 +24,14 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from qmix.qmix_trainer import QMIXTrainer
-from qmix.replay_buffer import Episode, EpisodeStep
-from qmix.agent_network import NUM_ACTIONS
-from graph.graph import QMIXGraph
+from qmix_report_writer.qmix.qmix_trainer import QMIXTrainer
+from qmix_report_writer.qmix.replay_buffer import Episode, EpisodeStep
+from qmix_report_writer.qmix.agent_network import NUM_ACTIONS
+from qmix_report_writer.graph.graph import QMIXGraph
 from datasets import tasks
-from utils.log import get_logger
-from utils.globals import PromptTokens, CompletionTokens, ReportState, Score, LengthGoal, ExecutionTrace
-from utils.config import get_config
+from qmix_report_writer.utils.log import get_logger
+from qmix_report_writer.utils.globals import PromptTokens, CompletionTokens, ReportState, Score, LengthGoal, ExecutionTrace
+from qmix_report_writer.utils.config import get_config
 from experiments.eval import length_score, report_score
 
 logger = get_logger("qmix_train")
