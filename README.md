@@ -114,6 +114,66 @@ default to the current working directory, so standalone use is unchanged):
   (`trace_file`). A host typically sets only this to group generated artifacts in
   one folder, leaving the DB in place.
 
+## Using the package in a host project
+
+A short end-to-end walkthrough for embedding the report writer in another
+project. The public entry point is the async `run_handcrafted`.
+
+**1. Install** — pin to a released version tag for reproducibility:
+
+```bash
+pip install git+https://github.com/leobeaumont/Q-Mix_report_writer.git@v0.1.0
+```
+
+> Use `@main` for the latest stable code, or `@<commit-sha>` to pin an exact
+> commit. Pinning a tag is recommended so a given host build always resolves the
+> same code.
+
+> Runtime prerequisite: a running [Ollama](https://ollama.com) serving both the
+> generation model (see `llm.default_model` in `default.yaml`) and the embedding
+> model `nomic-embed-text`. PDF export additionally needs Tectonic on `PATH`
+> (otherwise it is auto-downloaded; see *tectonic cache* above), or pass
+> `export_pdf=False`.
+
+**2. Wire it up** (optional) — point produced files at a dedicated folder and/or
+load your own config. Call `configure()` once, before the first run:
+
+```python
+from qmix_report_writer.utils.config import configure
+
+configure(overrides={"paths": {"output_root": "qmix_report_writer_data"}})
+# or load a whole override file:  configure(config_path="host_qmix.yaml")
+# or set env vars instead of calling configure():
+#   QMIX_REPORT_CONFIG=host_qmix.yaml  QMIX_REPORT_OUTPUT_ROOT=qmix_report_writer_data
+```
+
+**3. Ingest documents** into the RAG store (once, or whenever the corpus changes):
+
+```python
+from qmix_report_writer.tools.rag import RAGManager
+
+rag = RAGManager()                          # uses paths.chroma_path under the data root
+rag.add_document_from_path("docs/paper.pdf")  # also supports .txt/.md/.docx
+```
+
+**4. Generate a report:**
+
+```python
+import asyncio
+from qmix_report_writer import run_handcrafted
+
+answers, total_tokens = asyncio.run(run_handcrafted(
+    task="Write a technical report on graphene synthesis.",
+    export_pdf=True,      # set False to skip LaTeX/PDF and keep only markdown
+))
+report_markdown = answers[0]
+```
+
+Artifacts are written under `<output_root>/output/<timestamp>_<slug>/` (raw
+markdown, `.tex`, `.pdf`); the vector DB stays at `<data_root>/chroma_data`. From
+inside an existing async context, `await run_handcrafted(...)` directly instead of
+`asyncio.run`.
+
 ## Adaptation for report writing
 
 This repository is a specification of [ericjiang18/Agent-Q-Mix](https://github.com/ericjiang18/Agent-Q-Mix) for scientific report writing. This part describes the modifications applied to the code to solve the report writing task.

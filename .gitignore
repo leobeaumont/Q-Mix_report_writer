@@ -16,3 +16,8 @@ scoring_*.md
 arxiv_downloads/
 output/
 .tools/
+qmix_report_writer_data/
+# Python build artifacts
+build/
+dist/
+*.egg-info/
