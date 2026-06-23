@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import urllib.request
 import chromadb
 from chromadb.utils import embedding_functions
@@ -27,9 +28,40 @@ except ImportError:
 
 
 _PAGE_MARKER_RE = re.compile(r"\[PAGE (\d+)\]")
-# Observed character ceiling for nomic-embed-text on this Ollama deployment.
-# The embedding input is truncated to this length; stored chunk text is never truncated.
-_EMBED_MAX_CHARS = 2900
+
+# Embedding token budget. The (remote) Ollama server runs nomic-embed-text with
+# an embedding n_ubatch of 512; nomic is an encoder, so llama.cpp cannot split a
+# pooled embedding batch — an input over that limit crashes the runner
+# (Post .../embedding: EOF -> HTTP 500) instead of erroring cleanly.
+#
+# We can't count tokens exactly the way the server does: it tokenizes with
+# nomic's WordPiece tokenizer, which splits dense math/LaTeX text (physics PDFs)
+# into noticeably MORE tokens than tiktoken's cl100k. So we DON'T pre-shrink
+# every chunk on a guess. Instead the chunk budget reserves prefix room to keep
+# inputs comfortably under 512 cl100k, and _embed_batch self-heals: if the
+# server still rejects a batch, it re-embeds that batch one chunk at a time and
+# shrinks only the specific chunk(s) that keep failing — good chunks keep their
+# full text, and safety no longer depends on the exact cl100k-vs-nomic drift.
+_EMBED_TOKEN_LIMIT = 512          # server-side nomic n_ubatch; inputs over this crash the runner
+_PREFIX_TOKEN_BUDGET = 24         # headroom for "[Source: <name> | Page: N]\n" prefix
+_EMBED_SHRINK_FACTOR = 0.8        # each retry shrinks a faulty input to this fraction of its size
+_EMBED_MIN_TOKENS = 64            # floor the self-healing fallback shrinks down to before giving up
+_EMBED_RUNNER_RESTART_WAIT = 1.5  # seconds to let the remote runner restart after a crash
+
+# Shared cl100k_base encoder, reused for chunking and the embedding truncation guard.
+_ENC = tiktoken.get_encoding("cl100k_base")
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate `text` to at most `max_tokens` cl100k tokens (no-op if already short).
+
+    Only ever applied to the text sent to the embedder; stored chunk text is
+    never altered.
+    """
+    ids = _ENC.encode(text)
+    if len(ids) <= max_tokens:
+        return text
+    return _ENC.decode(ids[:max_tokens])
 
 # Bibliographic-metadata extraction (best effort, source-agnostic).
 #
@@ -303,7 +335,7 @@ def _chunk_text(text: str, chunk_size: int = 512, overlap: int = 50) -> List[str
     chunk_size: target tokens per chunk
     overlap: tokens to overlap between chunks
     """
-    encoding = tiktoken.get_encoding("cl100k_base")
+    encoding = _ENC
     tokens = encoding.encode(text)
 
     chunks = []
@@ -370,15 +402,9 @@ class RAGManager:
         self._bm25_metas: List[Dict] = []
         self._build_bm25_index()
 
-    def _embed_one(self, base_url: str, text: str) -> List[float]:
-        """Embed a single text, truncating to _EMBED_MAX_CHARS if needed."""
-        return self._embed_batch(base_url, [text])[0]
-
-    def _embed_batch(self, base_url: str, texts: List[str]) -> List[List[float]]:
-        """Embed multiple texts in a single Ollama API call."""
-        payload = json.dumps(
-            {"model": "nomic-embed-text", "input": [t[:_EMBED_MAX_CHARS] for t in texts]}
-        ).encode()
+    def _post_embed(self, base_url: str, inputs: List[str]) -> List[List[float]]:
+        """Single Ollama /api/embed call. Raises on any transport/HTTP error."""
+        payload = json.dumps({"model": "nomic-embed-text", "input": inputs}).encode()
         req = urllib.request.Request(
             f"{base_url}/api/embed",
             data=payload,
@@ -387,14 +413,62 @@ class RAGManager:
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read())["embeddings"]
 
-    def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+    def _embed_batch(self, base_url: str, texts: List[str]) -> List[List[float]]:
+        """Embed multiple texts in one Ollama call, isolating any faulty input.
+
+        Fast path: a single batched request with every chunk at full size. If
+        the remote runner rejects the batch (a nomic input over its 512-token
+        n_ubatch crashes the runner -> EOF/HTTP 500), we do NOT truncate the
+        whole batch. We re-embed it one chunk at a time so the good chunks keep
+        their full text, and only the specific chunk(s) that keep failing are
+        progressively shrunk (see _embed_one_resilient).
+        """
+        try:
+            return self._post_embed(base_url, list(texts))
+        except Exception:
+            # The batch crashed the runner; give it a moment to restart, then
+            # re-embed chunk by chunk so we can isolate and shrink only offenders.
+            time.sleep(_EMBED_RUNNER_RESTART_WAIT)
+            return [self._embed_one_resilient(base_url, t) for t in texts]
+
+    def _embed_one_resilient(self, base_url: str, text: str) -> List[float]:
+        """Embed a single chunk, shrinking it only if the server keeps rejecting it.
+
+        Tries the chunk at full size first (most chunks in a failed batch are
+        innocent — only their batch-mate was oversized). Only the chunk that
+        actually crashes the runner is truncated, then retried at progressively
+        smaller sizes until it embeds or hits _EMBED_MIN_TOKENS.
+        """
+        try:
+            return self._post_embed(base_url, [text])[0]
+        except Exception:
+            pass  # this chunk is the offender — shrink just this one
+
+        budget = int(len(_ENC.encode(text)) * _EMBED_SHRINK_FACTOR)
+        while budget >= _EMBED_MIN_TOKENS:
+            time.sleep(_EMBED_RUNNER_RESTART_WAIT)
+            try:
+                return self._post_embed(base_url, [_truncate_to_tokens(text, budget)])[0]
+            except Exception:
+                budget = int(budget * _EMBED_SHRINK_FACTOR)
+        raise RuntimeError(
+            f"embedding failed even after shrinking to {_EMBED_MIN_TOKENS} tokens"
+        )
+
+    def _embed_texts(self, texts: List[str], batch_size: int = 16) -> List[List[float]]:
         """Call Ollama directly for embeddings, bypassing ChromaDB's internal routing.
 
-        Embeds one text at a time with exponential back-off retry to handle
-        Ollama's internal child-process restart failures gracefully.
+        Embeds in batches (one API call per batch) instead of one request per
+        chunk, which is much faster for ingestion. _embed_batch isolates and
+        shrinks any chunk the server rejects, so an oversized chunk fails neither
+        its batch-mates nor the document. batch_size=16 matches the request width
+        already proven safe by the reranking path.
         """
         base_url = _get_ollama_base_url().rstrip("/")
-        return [self._embed_one(base_url, text) for text in texts]
+        embeddings: List[List[float]] = []
+        for start in range(0, len(texts), batch_size):
+            embeddings.extend(self._embed_batch(base_url, texts[start:start + batch_size]))
+        return embeddings
 
     def _build_bm25_index(self) -> None:
         """Build an in-memory BM25 index from the current ChromaDB collection."""
@@ -688,7 +762,12 @@ class RAGManager:
             Dictionary with ingestion stats: num_chunks, source_name, etc.
         """
         text, base_metadata = _load_text_from_file(file_path)
-        chunks = _chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+        # The contextual prefix ("[Source: ... | Page: N]\n") is embedded together
+        # with each chunk, so it must fit inside the 512-token encoder limit too.
+        # Reserve prefix headroom in the chunk budget so prefix + chunk <= 512 and
+        # no real content is lost to the safety-net truncation in _embed_batch.
+        effective_chunk_size = min(chunk_size, _EMBED_TOKEN_LIMIT - _PREFIX_TOKEN_BUDGET)
+        chunks = _chunk_text(text, chunk_size=effective_chunk_size, overlap=overlap)
 
         source_name = base_metadata["source_name"]
         file_type = base_metadata["file_type"]
@@ -836,6 +915,7 @@ if __name__ == "__main__":
     print(f"  {result['message']}: {result['chunks_deleted']} chunks removed")
 
     documents = [
+        "arxiv_downloads/ACCADA v012.pdf",
     ]
 
     print("\n=== Ingesting documents with chunk_size=256 ===")
