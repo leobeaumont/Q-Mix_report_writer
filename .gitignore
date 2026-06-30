@@ -21,3 +21,4 @@ qmix_report_writer_data/
 build/
 dist/
 *.egg-info/
+*.xlsx
