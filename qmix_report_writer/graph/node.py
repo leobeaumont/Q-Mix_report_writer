@@ -173,6 +173,7 @@ class Node(ABC):
         temporal_info: Dict,
         report_label: str,
         report_content: str,
+        pbds_block: Optional[str] = None,
         **kwargs,
     ) -> str:
         """Build the user-facing portion of the prompt from structured inputs.
@@ -206,6 +207,15 @@ class Node(ABC):
 
         user_prompt += f"\n### {report_label}:\n{report_content}\n"
         user_prompt += f"\n### Current Team Objective:\n{ReportState.instance().task}\n"
+
+        # Dedicated, high-priority block for the parameter-dependency tool. Only the
+        # Researcher passes this, and only when the tool is active and produced
+        # results, so nothing renders here for other agents or when the tool is off.
+        if pbds_block:
+            user_prompt += (
+                "\n### Parameter Dependency Analysis (tool output):\n"
+                f"{pbds_block}\n"
+            )
 
         if spatial_str:
             user_prompt += f"\n### Received messages:\n\n{spatial_str}"

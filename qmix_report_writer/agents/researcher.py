@@ -1,3 +1,4 @@
+import asyncio
 import re
 
 from qmix_report_writer.graph.node import Node
@@ -56,12 +57,33 @@ class Researcher(Node):
         # chunks are re-retrieved and re-synthesised round after round.
         self._reported_chunk_ids: set = set()
 
-    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):
+        # Optional PBDS parameter-dependency enrichment. Activates only when a
+        # workbook is configured and present; any load/parse problem disables it
+        # silently so the pipeline is unchanged whenever the tool is off.
+        self._pbds_manager = None
+        self._pbds_matcher = None
+        # Per-run frontier of parameters already surfaced by the tool. Used in
+        # PLANNING/RESEARCH so documents later retrieved FOR a connected parameter
+        # do not re-trigger expansion (keeps research covering the subject rather
+        # than walking the dependency graph).
+        self._pbds_surfaced_nodes: set = set()
+        try:
+            from qmix_report_writer.tools.pbds import NodeMatcher, load_pbds_manager
+            manager = load_pbds_manager()
+            if manager is not None:
+                self._pbds_matcher = NodeMatcher(manager)  # builds the graph/BM25 index
+                self._pbds_manager = manager
+        except Exception:
+            self._pbds_manager = None
+            self._pbds_matcher = None
+
+    def _process_inputs(self, raw_inputs, spatial_info, temporal_info, pbds_block=None, **kwargs):
         system_prompt = self.prompt_set.get_description(self.role)
         system_prompt += self.prompt_set.get_constraint(self.role)
         user_prompt = self._build_user_prompt(
             raw_inputs, spatial_info, temporal_info,
             "Current report state", self.report.progress,
+            pbds_block=pbds_block,
             **kwargs,
         )
         return system_prompt, user_prompt
@@ -135,6 +157,118 @@ class Researcher(Node):
             if info.get("role") == "Data Analyst":
                 return str(info.get("output", ""))
         return None
+
+    # ------------------------------------------------------------------ #
+    # PBDS parameter-dependency enrichment (optional; no-op when the tool is off)
+    # ------------------------------------------------------------------ #
+    def _pbds_phase(self):
+        """Return the active phase when PBDS should run (PLANNING/RESEARCH/DRAFTING), else None."""
+        try:
+            from qmix_report_writer.handcrafted_graph.state import PhaseState
+            from qmix_report_writer.handcrafted_graph.phases import PhaseType
+            phase = PhaseState.instance().current_phase
+            if phase in (PhaseType.PLANNING, PhaseType.RESEARCH, PhaseType.DRAFTING):
+                return phase
+        except Exception:
+            pass
+        return None
+
+    def _pbds_label(self, node: str) -> str:
+        """Human-readable label for a node (its description, or the raw name)."""
+        return self._pbds_manager.descriptions().get(node) or node
+
+    def _pbds_format_block(self, findings, phase) -> str:
+        """Render the phase-appropriate dependency-graph block from (Candidate, neighborhood) findings."""
+        from qmix_report_writer.handcrafted_graph.phases import PhaseType
+        lines = []
+        if phase == PhaseType.PLANNING:
+            lines.append(
+                "The retrieved evidence mentions parameters that the design dependency graph "
+                "links to others. Ensure the outline covers their causes and effects (topics "
+                "only — do not add formulas):"
+            )
+            for cand, nb in findings:
+                causes = ", ".join(self._pbds_label(c.node) for c in nb["sources"][:6]) or "none"
+                effects = ", ".join(self._pbds_label(c.node) for c in nb["effects"][:6]) or "none"
+                lines.append(f"- {cand.description}  |  caused by: {causes}  |  affects: {effects}")
+        elif phase == PhaseType.DRAFTING:
+            lines.append(
+                "For accuracy while writing THIS section, the mentioned parameters relate as "
+                "below. Use them to state causes/effects correctly; do NOT introduce new topics:"
+            )
+            for cand, nb in findings:
+                for cn in (list(nb["sources"]) + list(nb["effects"]))[:6]:
+                    if cn.direction == "sources":
+                        rel = f"{cand.description} is computed from {self._pbds_label(cn.node)}"
+                    else:
+                        rel = f"{self._pbds_label(cn.node)} is computed from {cand.description}"
+                    formula = cn.formulas[0] if cn.formulas else ""
+                    lines.append(f"- {rel}" + (f"  (formula: {formula})" if formula else ""))
+        else:  # RESEARCH
+            lines.append(
+                "The retrieved evidence discusses parameters whose design dependencies point to "
+                "related parameters. Treat these as candidate next research targets so the report "
+                "also covers their sources and effects:"
+            )
+            for cand, nb in findings:
+                causes = ", ".join(self._pbds_label(c.node) for c in nb["sources"][:6]) or "none"
+                effects = ", ".join(self._pbds_label(c.node) for c in nb["effects"][:6]) or "none"
+                lines.append(f"- {cand.description} — depends on: {causes}; influences: {effects}")
+        return "\n".join(lines)
+
+    async def _pbds_block(self, documents) -> str:
+        """Build the dependency-graph analysis block for the retrieved evidence, or "".
+
+        No-op when the tool is inactive, the phase is not PBDS-relevant, or nothing
+        matches. In PLANNING/RESEARCH the frontier set records every surfaced
+        parameter so documents later retrieved FOR those parameters do not
+        re-trigger the tool. DRAFTING annotates the current section only and does
+        not touch the frontier. Never raises — the optional tool must not break
+        retrieval.
+        """
+        matcher = self._pbds_matcher
+        if matcher is None:
+            return ""
+        phase = self._pbds_phase()
+        if phase is None:
+            return ""
+        from qmix_report_writer.handcrafted_graph.phases import PhaseType
+        try:
+            combined = "\n\n".join(str(d.get("content", "")) for d in documents)[:8000]
+            if not combined.strip():
+                return ""
+            matched = await matcher.amatch(combined, self.llm, calling_agent="Researcher")
+            apply_frontier = phase != PhaseType.DRAFTING
+            findings = []
+            for cand in matched:
+                if apply_frontier and cand.node in self._pbds_surfaced_nodes:
+                    continue
+                nb = self._pbds_manager.neighborhood(cand.node, k=1)
+                neighbors = list(nb["sources"]) + list(nb["effects"])
+                if not neighbors:
+                    continue
+                if apply_frontier:
+                    self._pbds_surfaced_nodes.add(cand.node)
+                    self._pbds_surfaced_nodes.update(cn.node for cn in neighbors)
+                findings.append((cand, nb))
+                if len(findings) >= 4:
+                    break
+            return self._pbds_format_block(findings, phase) if findings else ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _run_pbds_sync(coro):
+        """Run a PBDS coroutine from the synchronous execute path."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, coro).result()
+        return asyncio.run(coro)
 
     def _execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
@@ -230,7 +364,14 @@ class Researcher(Node):
             SourceBuffer.instance().add(document)
 
         # Base execution
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
+        pbds_block = (
+            self._run_pbds_sync(self._pbds_block(documents))
+            if self._pbds_matcher is not None
+            else ""
+        )
+        system_prompt, user_prompt = self._process_inputs(
+            input, spatial_info, temporal_info, pbds_block=pbds_block, **kwargs
+        )
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
@@ -335,7 +476,10 @@ class Researcher(Node):
             SourceBuffer.instance().add(document)
 
         # Base execution
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
+        pbds_block = await self._pbds_block(documents) if self._pbds_matcher is not None else ""
+        system_prompt, user_prompt = self._process_inputs(
+            input, spatial_info, temporal_info, pbds_block=pbds_block, **kwargs
+        )
         if execution_trace:
             execution_trace.trace[-1]["Researcher"]["prompt"] = system_prompt + user_prompt
         message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
