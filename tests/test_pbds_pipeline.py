@@ -160,6 +160,31 @@ async def test_shortlist_bm25():
 # 4. Layer 2: verifier multi-pick + lenient (fenced) JSON + score-order.
 # ---------------------------------------------------------------------------
 
+async def test_shortlist_dedupes_by_description():
+    # Two nodes share "Reactor core temperature" (as the real workbook reuses
+    # labels). For the query below they tie for the top score, so without dedup
+    # they would take both of the top_k=2 slots and squeeze out the distinct
+    # "Reactor core pressure". Dedup must keep one of them and free the slot.
+    descriptions = {
+        "Reactor_core_temperature_A1": "Reactor core temperature",
+        "Reactor_core_temperature_A2": "Reactor core temperature",  # duplicate label
+        "Reactor_core_pressure_B1": "Reactor core pressure",
+        "Alpha_C1": "Alpha metric one",   # fillers for sane IDF
+        "Beta_C2": "Beta metric two",
+    }
+
+    class StubManager:
+        def descriptions(self):
+            return descriptions
+
+    nm = NodeMatcher(StubManager(), top_k=2, min_score_ratio=0.0)
+    sl = nm.shortlist("reactor core temperature")
+    labels = [c.description for c in sl]
+    assert labels.count("Reactor core temperature") == 1, sl        # deduped
+    assert "Reactor core pressure" in labels, sl                    # slot freed for it
+    print("PASS  test_shortlist_dedupes_by_description")
+
+
 async def test_verify_multipick_and_lenient_json():
     nm = NodeMatcher(_build_manager())
     cands = [
@@ -337,6 +362,7 @@ async def _run_all():
         test_manager_graph_traversal,
         test_traversal_error_handling,
         test_shortlist_bm25,
+        test_shortlist_dedupes_by_description,
         test_verify_multipick_and_lenient_json,
         test_expand_single_match_and_truncation,
         test_expand_multi_match_priority,

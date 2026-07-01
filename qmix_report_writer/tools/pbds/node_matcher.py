@@ -179,6 +179,10 @@ class NodeMatcher:
         """Return up to `top_k` candidate nodes for a chunk, best score first.
 
         Recall-first: this casts a wide net; the LLM verifier tightens it.
+        Candidates are deduplicated by description — the workbook reuses the same
+        label on several rows, and those nodes are indistinguishable to the verifier
+        (and share neighbours), so keeping only the best-scoring one per description
+        frees shortlist slots for genuinely different parameters.
         Returns an empty list when nothing scores above `score_floor`.
         """
         query = _tokenize(chunk_text)
@@ -194,9 +198,14 @@ class NodeMatcher:
         top_score = float(scores[order[0]])
         threshold = max(self.score_floor, top_score * self.min_score_ratio)
         out: List[Candidate] = []
-        for i in order[:cap]:
+        seen_descriptions: set = set()
+        for i in order:
             if scores[i] <= threshold:
                 break  # order is descending, so nothing better remains
+            key = self._texts[i].strip().lower()
+            if key in seen_descriptions:
+                continue  # a higher-scoring node with this description is already in
+            seen_descriptions.add(key)
             out.append(
                 Candidate(
                     node=self._node_ids[i],
@@ -204,6 +213,8 @@ class NodeMatcher:
                     score=round(float(scores[i]), 4),
                 )
             )
+            if len(out) >= cap:
+                break
         return out
 
     # ------------------------------------------------------------------ #

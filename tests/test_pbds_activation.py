@@ -85,8 +85,10 @@ def test_env_var_override_activates():
 def test_default_is_off_when_no_file_present():
     _reset_config()
     try:
-        # Nothing configured: default 'pbds_parameters.xlsx' is absent at the repo root.
-        cfg.configure()
+        # Clear any configured path so we exercise the default-filename fallback
+        # ('pbds_parameters.xlsx'), which is absent at the repo root. (default.yaml
+        # may point workbook_path at a real puppet file, so null it explicitly.)
+        cfg.configure(overrides={"pbds": {"workbook_path": None}})
         assert pbds_available() is False
         assert load_pbds_manager() is None
     finally:
