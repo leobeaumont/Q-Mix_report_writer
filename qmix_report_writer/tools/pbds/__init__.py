@@ -1,3 +1,4 @@
+from .activation import load_pbds_manager, pbds_available
 from .node_matcher import Candidate, NodeMatcher
 from .pbds_manager import ConnectedNode, PBDSManager
 from .pdbs_pareto_core import (
@@ -8,6 +9,8 @@ from .pdbs_pareto_core import (
 )
 
 __all__ = [
+    "load_pbds_manager",
+    "pbds_available",
     "Candidate",
     "NodeMatcher",
     "ConnectedNode",

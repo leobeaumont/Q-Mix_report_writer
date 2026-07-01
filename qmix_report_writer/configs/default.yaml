@@ -64,6 +64,22 @@ rag:
   # Falls back to all-vector if no qualifying BM25 chunk exists. Set to 0 to disable.
   bm25_floor: 1
 
+pbds:
+  # PBDS dependency-graph tool. It reads an Excel parameter workbook (.xlsx) whose
+  # formulas define the dependency graph between reactor parameters. The tool
+  # activates ONLY when a readable file exists at workbook_path; when the file is
+  # missing the pipeline runs unchanged (silent skip).
+  #
+  # Relative paths resolve under the data root (like the vector DB); absolute paths
+  # are used as-is. Left unset here, the path falls back to the
+  # QMIX_REPORT_PBDS_WORKBOOK env var, then to 'pbds_parameters.xlsx' under the data
+  # root. Overload it from a host the same ways as the other config:
+  #   - configure(overrides={"pbds": {"workbook_path": "/abs/params.xlsx"}})
+  #   - a QMIX_REPORT_CONFIG override YAML setting pbds.workbook_path
+  #   - the QMIX_REPORT_PBDS_WORKBOOK environment variable
+  # workbook_path: /abs/or/relative/params.xlsx
+  workbook_path:
+
 llm:
   default_model: alibayram/Qwen3-30B-A3B-Instruct-2507
   temperature: 0.7

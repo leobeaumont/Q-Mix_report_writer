@@ -10,6 +10,7 @@ _config = None
 ENV_CONFIG_PATH = "QMIX_REPORT_CONFIG"        # path to a YAML override file
 ENV_DATA_ROOT = "QMIX_REPORT_DATA_ROOT"       # base dir for the project's data (e.g. the DB)
 ENV_OUTPUT_ROOT = "QMIX_REPORT_OUTPUT_ROOT"   # base dir for PRODUCED files (reports, traces)
+ENV_PBDS_WORKBOOK = "QMIX_REPORT_PBDS_WORKBOOK"  # direct path to the PBDS parameter workbook
 
 
 def _load_defaults() -> dict:
@@ -153,6 +154,34 @@ def get_trace_path(filename: str = "handcrafted_trace.json") -> Path:
     """Path for a saved execution trace (a produced artifact)."""
     paths = get_config().get("paths", {}) or {}
     return _resolve_under(get_output_root(), paths.get("trace_file"), filename)
+
+
+def get_pbds_workbook_path() -> Path:
+    """Configured path to the PBDS parameter workbook (.xlsx) — may not exist.
+
+    The workbook is a *used* input resource (like the vector DB), so it resolves
+    against the data root. Resolution (each overrides the previous):
+      1. pbds.workbook_path in the config — set in default.yaml, a QMIX_REPORT_CONFIG
+         override file, or a configure(overrides=...) dict passed by a host.
+      2. the QMIX_REPORT_PBDS_WORKBOOK environment variable.
+      3. the default filename 'pbds_parameters.xlsx'.
+    Relative values resolve under the data root; absolute values are used as-is.
+    This only resolves the path — see get_active_pbds_workbook() for the existence
+    gate that decides whether the tool activates.
+    """
+    pbds = get_config().get("pbds", {}) or {}
+    value = pbds.get("workbook_path") or os.environ.get(ENV_PBDS_WORKBOOK)
+    return _resolve_under(get_data_root(), value, "pbds_parameters.xlsx")
+
+
+def get_active_pbds_workbook() -> Optional[Path]:
+    """The PBDS workbook to use, or None when no readable file exists there.
+
+    Returns the resolved path only if a file is present, so callers can leave the
+    pipeline unchanged (the tool silently stays off) when the workbook is absent.
+    """
+    path = get_pbds_workbook_path()
+    return path if path.is_file() else None
 
 
 def get_llm(llm_name: Optional[str] = None):
