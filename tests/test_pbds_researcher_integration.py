@@ -150,6 +150,38 @@ async def test_drafting_annotates_and_ignores_frontier():
     print("PASS  test_drafting_annotates_and_ignores_frontier")
 
 
+class _FakeTrace:
+    """Minimal ExecutionTrace stand-in: one round dict with the expected slots."""
+
+    def __init__(self):
+        self.trace = [{
+            "Researcher": {"message_to": []},
+            "PBDS": {"action": None, "message_to": [], "prompt": None, "response": None},
+            "exec_order": [],
+        }]
+
+
+async def test_pbds_is_logged_in_trace():
+    PhaseState.instance().set_phase(PhaseType.RESEARCH)
+    r = _make_researcher(["Max_fuel_temperature_F10"])
+    et = _FakeTrace()
+
+    block = await r._pbds_block(_docs("we control the max fuel temperature"), et)
+    round0 = et.trace[-1]
+
+    assert round0["PBDS"]["response"] == block and block, round0["PBDS"]
+    assert "PBDS" in round0["exec_order"], round0["exec_order"]
+    assert "PBDS" in round0["Researcher"]["message_to"], round0["Researcher"]
+    assert "Researcher" in round0["PBDS"]["message_to"], round0["PBDS"]
+    assert "Max_fuel_temperature_F10" in round0["PBDS"]["prompt"], round0["PBDS"]["prompt"]
+
+    # A frontier-suppressed second call still logs, with an explicit no-match marker.
+    et2 = _FakeTrace()
+    await r._pbds_block(_docs("more about the max fuel temperature"), et2)
+    assert et2.trace[-1]["PBDS"]["response"] == "[NO MATCH]", et2.trace[-1]["PBDS"]
+    print("PASS  test_pbds_is_logged_in_trace")
+
+
 async def test_non_pbds_phase_is_noop():
     PhaseState.instance().set_phase(PhaseType.VALIDATION)
     r = _make_researcher(["Max_fuel_temperature_F10"])
@@ -163,6 +195,7 @@ async def _run_all():
         test_tool_off_renders_no_section,
         test_research_block_renders_and_frontier_blocks_recursion,
         test_drafting_annotates_and_ignores_frontier,
+        test_pbds_is_logged_in_trace,
         test_non_pbds_phase_is_noop,
     ]
     passed = failed = 0

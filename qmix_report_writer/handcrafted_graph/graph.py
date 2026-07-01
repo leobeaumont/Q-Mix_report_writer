@@ -1345,6 +1345,7 @@ class HandcraftedGraph:
             for name in self.agent_names
         }
         round_data["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None, "sources": []}
+        round_data["PBDS"] = {"action": None, "message_to": [], "prompt": None, "response": None}
         if self.collector_id is not None:
             round_data["Collector"]["report_state"] = ReportState.instance().content
         round_data["exec_order"] = []

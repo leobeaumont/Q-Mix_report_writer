@@ -216,7 +216,7 @@ class Researcher(Node):
                 lines.append(f"- {cand.description} — depends on: {causes}; influences: {effects}")
         return "\n".join(lines)
 
-    async def _pbds_block(self, documents) -> str:
+    async def _pbds_block(self, documents, execution_trace=None) -> str:
         """Build the dependency-graph analysis block for the retrieved evidence, or "".
 
         No-op when the tool is inactive, the phase is not PBDS-relevant, or nothing
@@ -253,9 +253,32 @@ class Researcher(Node):
                 findings.append((cand, nb))
                 if len(findings) >= 4:
                     break
-            return self._pbds_format_block(findings, phase) if findings else ""
+            block = self._pbds_format_block(findings, phase) if findings else ""
+            self._trace_pbds(execution_trace, phase, matched, block)
+            return block
         except Exception:
             return ""
+
+    @staticmethod
+    def _trace_pbds(execution_trace, phase, matched, block) -> None:
+        """Log PBDS activity into the round's 'PBDS' trace entry (mirrors the RAG tool)."""
+        if execution_trace is None:
+            return
+        try:
+            round_data = execution_trace.trace[-1]
+            round_data.setdefault(
+                "PBDS", {"action": None, "message_to": [], "prompt": None, "response": None}
+            )
+            round_data.setdefault("exec_order", []).append("PBDS")
+            round_data["PBDS"]["message_to"].append("Researcher")
+            if "Researcher" in round_data:
+                round_data["Researcher"]["message_to"].append("PBDS")
+            round_data["PBDS"]["prompt"] = (
+                f"phase={getattr(phase, 'value', phase)} | matched={[c.node for c in matched]}"
+            )
+            round_data["PBDS"]["response"] = block or "[NO MATCH]"
+        except Exception:
+            return
 
     @staticmethod
     def _run_pbds_sync(coro):
@@ -365,7 +388,7 @@ class Researcher(Node):
 
         # Base execution
         pbds_block = (
-            self._run_pbds_sync(self._pbds_block(documents))
+            self._run_pbds_sync(self._pbds_block(documents, execution_trace))
             if self._pbds_matcher is not None
             else ""
         )
@@ -476,7 +499,11 @@ class Researcher(Node):
             SourceBuffer.instance().add(document)
 
         # Base execution
-        pbds_block = await self._pbds_block(documents) if self._pbds_matcher is not None else ""
+        pbds_block = (
+            await self._pbds_block(documents, execution_trace)
+            if self._pbds_matcher is not None
+            else ""
+        )
         system_prompt, user_prompt = self._process_inputs(
             input, spatial_info, temporal_info, pbds_block=pbds_block, **kwargs
         )
