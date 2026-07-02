@@ -26,17 +26,6 @@ class TechnicalWriter(Node):
         )
         return system_prompt, user_prompt
 
-    def _execute(self, input, spatial_info, temporal_info, **kwargs):
-        execution_trace = kwargs.get("execution_trace", None)
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        if execution_trace:
-            execution_trace.trace[-1]["TechnicalWriter"]["prompt"] = system_prompt + user_prompt
-        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message, calling_agent="TechnicalWriter")
-        if execution_trace:
-            execution_trace.trace[-1]["TechnicalWriter"]["response"] = response
-        return response
-
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)

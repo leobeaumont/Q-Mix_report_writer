@@ -10,6 +10,7 @@ import shortuuid
 from typing import List, Any, Optional, Dict
 from abc import ABC, abstractmethod
 import asyncio
+import concurrent.futures
 
 from qmix_report_writer.utils.globals import PromptTokens, CompletionTokens, ReportState
 
@@ -225,9 +226,22 @@ class Node(ABC):
 
         return user_prompt
 
-    @abstractmethod
     def _execute(self, input: List[Any], spatial_info: Dict[str, Any], temporal_info: Dict[str, Any], **kwargs):
-        pass
+        """Synchronous execution path: runs the async implementation.
+
+        Agents implement only _async_execute; this wrapper keeps the sync
+        execute() entry point working from both plain and running-loop
+        contexts (same pattern as OllamaChat.gen -> agen).
+        """
+        coro = self._async_execute(input, spatial_info, temporal_info, **kwargs)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, coro).result()
+        return asyncio.run(coro)
 
     @abstractmethod
     async def _async_execute(self, input: List[Any], spatial_info: Dict[str, Any], temporal_info: Dict[str, Any], **kwargs):

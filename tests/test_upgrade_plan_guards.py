@@ -37,8 +37,13 @@ from qmix_report_writer.handcrafted_graph.state import PhaseState
 from qmix_report_writer.handcrafted_graph.phases import (
     PhaseType, PHASE_SEQUENCE, PHASE_MAP,
 )
-# Stage 2.2 / 2.4: these move out of graph.py — update imports only.
+# Stage 2.4: the validation helpers move out of graph.py — update imports only.
 from qmix_report_writer.handcrafted_graph.graph import HandcraftedGraph
+# Stage 2.2 (done): finalization now lives in utils/report_finalize.
+from qmix_report_writer.utils.report_finalize import (
+    apply_citation_tags, build_bibliography,
+    _rewrite_inline_references, _strip_orphan_citation_markers,
+)
 from qmix_report_writer.handcrafted_graph.prompts.handcrafted_prompt_set import (
     HandcraftedPromptSet, _extract_section_directive,
 )
@@ -127,8 +132,14 @@ def test_node_import_and_eval_standalone():
 # Stage 2.1 — sync/async consolidation guards (behavior equivalence)
 # ---------------------------------------------------------------------------
 
-def _captured_messages(mock_fn):
-    (messages,), _ = mock_fn.call_args
+def _captured_messages(llm):
+    """Messages sent to the LLM, from whichever entry point the path used.
+
+    Before Stage 2.1 the sync path calls llm.gen; after the consolidation it
+    delegates to llm.agen. The equivalence assertions are the same either way.
+    """
+    call = llm.gen.call_args or llm.agen.call_args
+    (messages,), _ = call
     return messages
 
 
@@ -141,13 +152,13 @@ async def test_data_analyst_sync_async_equivalence():
     llm = _mock_llm(["SYNC_RESP"])
     da = _bare_agent(DataAnalyst, "Data Analyst", llm)
     sync_out = da._execute(task, spatial, temporal, action=3)
-    sync_msgs = _captured_messages(llm.gen)
+    sync_msgs = _captured_messages(llm)
 
     _reset_singletons()
     llm = _mock_llm(["SYNC_RESP"])
     da = _bare_agent(DataAnalyst, "Data Analyst", llm)
     async_out = await da._async_execute(task, spatial, temporal, action=3)
-    async_msgs = _captured_messages(llm.agen)
+    async_msgs = _captured_messages(llm)
 
     assert sync_out == async_out == "SYNC_RESP"
     assert sync_msgs == async_msgs, "sync and async paths built different prompts"
@@ -205,7 +216,7 @@ def test_citation_overlap_tagging():
     )
     rs.append(body, "progress", [chunk])
 
-    _bare_graph()._apply_citation_tags(0)
+    apply_citation_tags(rs, 0)
 
     content = rs.sections[0]["content"]
     assert "[cite:1, p.7]" in content, f"tag missing: {content!r}"
@@ -218,24 +229,23 @@ def test_citation_overlap_tagging():
 def test_inline_reference_rewrite_and_orphans():
     _reset_singletons()
     rs = ReportState.instance()
-    graph = _bare_graph()
     known = {"2105.06979.pdf": "2105.06979.pdf"}
 
-    out, n = graph._rewrite_inline_references(
+    out, n = _rewrite_inline_references(
         "As shown in [2105.06979.pdf | Page: 26] the flow is anisotropic.",
         known, rs.bibliography_map, rs,
     )
     assert n == 1 and "[cite:1, p.26]" in out, f"Got: {out!r}"
 
-    out, n = graph._rewrite_inline_references(
+    out, n = _rewrite_inline_references(
         "As shown in [unknown_file.pdf | Page: 3] nothing changes.",
         known, rs.bibliography_map, rs,
     )
     assert n == 0 and "[unknown_file.pdf | Page: 3]" in out
 
-    out, n = graph._strip_orphan_citation_markers("This agrees with Ref. [32] closely.")
+    out, n = _strip_orphan_citation_markers("This agrees with Ref. [32] closely.")
     assert n == 1 and "[32]" not in out
-    out, n = graph._strip_orphan_citation_markers("Verified value [cite:2, p.4].")
+    out, n = _strip_orphan_citation_markers("Verified value [cite:2, p.4].")
     assert n == 0 and "[cite:2, p.4]" in out
     print("PASS  test_inline_reference_rewrite_and_orphans")
 
@@ -250,7 +260,7 @@ def test_bibliography_build():
     rs.bibliography_map = {"2105.06979.pdf": 1}
     rs.citation_counts = {1: 2}
 
-    _bare_graph()._build_bibliography()
+    build_bibliography(rs)
 
     bib = rs.bibliography
     assert bib.startswith("## Bibliography")

@@ -21,8 +21,12 @@ paths:
   output_dir: output                     # one sub-folder per report run (under output_root)
   trace_file: handcrafted_trace.json     # execution trace dump (under output_root)
 
+# QMIX network/trainer hyperparameters, consumed by the qmix runner
+# (qmix/runner.py — upgrade-plan Stage 4.6; CLI flags override these).
+# The action count is NOT configured here: it is defined in code
+# (qmix/agent_network.py NUM_ACTIONS) and obs/state dims derive from the
+# observation builder.
 qmix:
-  n_actions: 16
   gnn_hidden_dim: 128
   gnn_layers: 2
   rnn_hidden_dim: 128
@@ -33,23 +37,18 @@ qmix:
   buffer_capacity: 5000
   batch_size: 32
   grad_clip: 10.0
-  epsilon_start: 1.0
-  epsilon_end: 0.05
+  training:
+    num_episodes: 500
+    epsilon_start: 1.0
+    epsilon_end: 0.05
+    log_interval: 10
+    save_interval: 50
 
 reward:
   report_quality_weight: 1.0
   length_weight: 0.1
   length_goal: 25000  # 25000 char -> ~4500 words -> ~1 scientific document
-  length_sigma: 8500  # sigma of the gaussian curve: 8500 -> reward start at ~5000 char 
-
-training:
-  num_episodes: 500
-  num_rounds: 2
-  log_interval: 10
-  save_interval: 50
-
-evaluation:
-  num_rounds: 2
+  length_sigma: 8500  # sigma of the gaussian curve: 8500 -> reward start at ~5000 char
 
 rag:
   # Reranking mode applied after RRF fusion.

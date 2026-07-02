@@ -57,26 +57,26 @@
 
 ## Stage 0 — Guardrails (before touching anything)
 
-### 0.1 `[ ]` Capture the handcrafted baseline
+### 0.1 `[x]` Capture the handcrafted baseline
 - **What:** Run the existing test suite (`tests/test_review_pipeline_fixes.py`, `test_directive_review.py`, `test_remove_duplicate_section.py`, PBDS tests) **plus the two new plan suites** (`test_upgrade_plan_guards.py`, `test_upgrade_plan_acceptance.py`) with `.venv\Scripts\python.exe` and record the result. Do one full smoke run of `run_handcrafted` on a known task with `--trace`, and archive the trace + report output (e.g. copy into `tests/baseline_refs/2026-07-02/`) as the reference for later regression checkpoints.
 - **Why:** every later "behavior unchanged" claim needs something concrete to compare against.
 - **Test:** baseline recorded 2026-07-02 on pre-change code: guards 20/20 PASS, acceptance 12 PEND / 0 FAIL.
-- **Done note:** —
+- **Done note:** 2026-07-02 — offline battery all green (49 passed across 7 suites; live suites skipped, need Ollama). Instead of a fresh smoke run, archived the last pre-change full-run artifacts (2026-07-01 trace + report) into `tests/baseline_refs/2026-07-02/` with a README recording the battery results. A fresh confirmation run will be requested from the user at checkpoint 2.5.
 
 ---
 
 ## Stage 1 — Legacy removal & housekeeping (D3)
 
-### 1.1 `[ ]` Delete the legacy free-form QMIX path
+### 1.1 `[x]` Delete the legacy free-form QMIX path
 - **What:** Delete `qmix_report_writer/graph/graph.py`, `experiments/run_qmix_train.py`, `experiments/run_qmix_eval.py`, `scripts/query_qmix.py`. Update `qmix_report_writer/graph/__init__.py` to export only `Node` (the `from .graph import QMIXGraph` line goes). Keep `graph/node.py` (used by everything) and keep `experiments/eval.py` (`report_score`/`length_score` are reused by Stage 4.4 — verify it imports cleanly standalone after the deletions).
 - **Absorbed lessons** (legacy bugs whose fix now lands in new code instead): roster read from `agent_configs` config key → Stage 4.6 *(report 0.1)*; reward only on *successful* append → Stage 4.4 *(report 0.8)*; `SourceBuffer` reset per episode → Stage 4.6 *(report 0.6)*; self-query masked → Stage 4.1 *(report 0.7)*. Bugs 0.2/0.3/0.4 die with the deleted files.
 - **Test:** acceptance `test_stage1_1_legacy_deleted` (PEND→PASS); guard `test_node_import_and_eval_standalone` must stay green (Node export + `experiments.eval` standalone).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `git rm` of the four legacy files; `graph/__init__.py` now exports only `Node`. Verified `qmix/__init__.py` untouched by the deletion (imports only networks/trainer/buffer) and `experiments.eval` imports standalone. Acceptance test PASS.
 
-### 1.2 `[ ]` Config hygiene pass *(report 0.5)*
+### 1.2 `[x]` Config hygiene pass *(report 0.5)*
 - **What:** In `configs/default.yaml`: delete the now-meaningless `evaluation:` section and the stale `training.num_rounds`; leave a minimal `qmix:` section with a comment that its values are finalized in Stage 4 (n_actions, dims). Decide layout for new-runner options (e.g. `qmix.training.num_episodes`, `qmix.training.epsilon_*`) so Stage 4.6 reads config instead of hard-coded argparse defaults, with CLI flags as overrides.
 - **Test:** acceptance `test_stage1_2_config_hygiene` (PEND→PASS).
-- **Done note:** —
+- **Done note:** 2026-07-02 — dropped stale `n_actions: 16` (action count lives in code), deleted top-level `training:`/`evaluation:` sections; runner options now live under `qmix.training.*` (num_episodes, epsilon_start/end, log/save intervals) for Stage 4.6 to consume. `reward:` section kept as-is. Acceptance test PASS.
 
 ---
 
@@ -84,31 +84,31 @@
 
 > Order matters: 2.1 first, so every later agent-level change is written once, not twice.
 
-### 2.1 `[ ]` Consolidate agents' sync/async duplication *(report non-port #1)*
+### 2.1 `[x]` Consolidate agents' sync/async duplication *(report non-port #1)*
 - **What:** In each agent (`researcher.py` is the big one, plus `collector.py`, `lead_architect.py`, `data_analyst.py`, `reviewer.py`, `technical_writer.py`): collapse `_execute`/`_async_execute` into one async implementation; the sync variant becomes a thin wrapper (same pattern as `OllamaChat.gen` → `agen`). No behavior change.
 - **Test:** guards `test_data_analyst_sync_async_equivalence`, `test_lead_architect_sync_async_equivalence_and_parse` (prove sync/async build identical prompts+outputs — must stay green through the merge), `test_parse_queries`, `test_collector_append_and_skip` (Collector path).
-- **Done note:** —
+- **Done note:** 2026-07-02 — the sync wrapper now lives ONCE on the `Node` base class (`_execute` is concrete: runs `_async_execute` via asyncio.run / thread-pool when a loop is running, same pattern as `OllamaChat.gen`); all six agents lost their `_execute` duplicates, `Researcher._run_pbds_sync` deleted (subsumed). Guard helper `_captured_messages` made entry-point-agnostic (assertions unchanged). Guards 20/20 + all agent-touching suites green.
 
-### 2.2 `[ ]` Extract report finalization into a shared module *(report 1.2)*
+### 2.2 `[x]` Extract report finalization into a shared module *(report 1.2)*
 - **What:** Move `_apply_citation_tags`, `_rewrite_inline_references`, `_strip_orphan_citation_markers`, `_build_bibliography`, `_format_bib_entry`/`_compose_reference`, `_generate_abstract` (+ their regex constants and `_tokenize`) out of `handcrafted_graph/graph.py` into `utils/report_finalize.py` (functions taking `report_state` and, where needed, an LLM). `HandcraftedGraph` delegates to it — same call sites, same behavior.
 - **Also:** add a `finalize: bool = True` parameter to `HandcraftedGraph.arun()` gating abstract + bibliography assembly (citation tagging stays tied to SECTION_REVIEW, which training runs don't execute anyway). Default `True` → handcrafted unchanged; training passes `False` (needed by D6, used in Stage 4.6).
 - **Test:** guards `test_citation_overlap_tagging`, `test_inline_reference_rewrite_and_orphans`, `test_bibliography_build` (re-point their imports at the new module in this stage's commit; assertions unchanged); acceptance `test_stage2_2_finalize_module_and_flag` (PEND→PASS; asserts the suggested function names + the `finalize=True` default).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `utils/report_finalize.py` created (apply_citation_tags / build_bibliography / generate_abstract + private inline-ref/orphan/tokenize helpers, code moved verbatim; log lines lose the `[graph-id]` prefix). `arun()` gained `finalize: bool = True` gating bibliography+abstract (assembly reordered harmlessly: content snapshot before build_bibliography, which never touches content). 3 citation call sites re-pointed; guard-test imports updated; acceptance test PASS.
 
-### 2.3 `[ ]` Extract trace helpers *(report 1.5)*
+### 2.3 `[x]` Extract trace helpers *(report 1.5)*
 - **What:** Move `_init_trace_round` / `_trace_spatial_edges` into a small shared helper (e.g. `utils/trace.py` or a mixin) so the round-slot schema lives in one place. Add an optional per-agent `action` field populated when a controller supplies actions (Stage 4.2) — `None` for handcrafted runs, exactly like today, so `StandaloneVisualizer` keeps working on both.
 - **Test:** guard `test_trace_round_schema` (pins the round-slot keys; additive `action` field keeps it green).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `utils/trace.py` with `init_trace_round`/`trace_spatial_edges`; graph keeps thin `_init_trace_round`/`_trace_spatial_edges` delegates so all call sites and tests are untouched. The per-agent `action` slot already exists in the schema (always None today); Stage 4.2 will populate it.
 
-### 2.4 `[ ]` (Optional, recommended) Split the validation loop out of `graph.py` *(report non-port #3)*
+### 2.4 `[x]` (Optional, recommended) Split the validation loop out of `graph.py` *(report non-port #3)*
 - **What:** Move `_decompose_validation_directive`, `_validation_windows`, `_build_section_windows`, `_revalidation_sections` into e.g. `handcrafted_graph/validation.py`. Pure code motion; shrinks `graph.py` toward its phase-execution core before Stage 3 modifies it.
 - **Test:** guard `test_revalidation_sections_and_directive_extract` (re-point import on move); `_build_section_windows` already pinned by `test_no_trailing_singleton_window` in `test_review_pipeline_fixes.py`.
-- **Done note:** —
+- **Done note:** 2026-07-02 — `handcrafted_graph/validation.py` (build_section_windows / revalidation_sections / validation_windows / decompose_validation_directive, the latter now taking the llm as a parameter). Graph keeps staticmethod ALIASES (`_build_section_windows = staticmethod(...)`) + thin delegates, so no test import needed re-pointing — both old and new suites green unchanged. `graph.py`: 1900 → 1257 lines across Stage 2.
 
-### 2.5 `[ ]` Regression checkpoint #1
+### 2.5 `[~]` Regression checkpoint #1
 - **What:** Re-run the Stage 0 protocol (tests + smoke run) and compare against the baseline: same phase sequence in the trace, same section count, bibliography/abstract present, no new warnings. Record findings here.
 - **Test:** full guard suite must be 20/20 PASS (with the Stage-2 import re-points applied); acceptance suite must show 0 FAIL.
-- **Done note:** —
+- **Done note:** 2026-07-02 — test half done: full offline battery green after Stage 1+2 (49 passed across 7 suites; guards 20/20; acceptance 3 PASS / 9 PEND / 0 FAIL). **Smoke half pending:** waiting on a user-run full report generation (with `--trace`) to compare against `tests/baseline_refs/2026-07-02/` (same phase sequence, sections written, bibliography + abstract present).
 
 ---
 
@@ -249,11 +249,11 @@ The handcrafted write round is scripted: when Round A produced a usable blueprin
 
 | Stage | Items | Done |
 |-------|-------|------|
-| 0 — Guardrails | 1 | 0 |
-| 1 — Legacy removal | 2 | 0 |
-| 2 — Shared refactors | 5 | 0 |
+| 0 — Guardrails | 1 | 1 |
+| 1 — Legacy removal | 2 | 2 |
+| 2 — Shared refactors | 5 | 4 (2.5 awaiting smoke run) |
 | 3 — Controller seam | 4 | 0 |
 | 4 — QMIX decision layer | 8 | 0 |
 | 5 — Observations | 2 | 0 |
 | 6 — Docs & cleanup | 5 | 0 |
-| **Total** | **27** | **0** |
+| **Total** | **27** | **7** |

@@ -55,7 +55,7 @@ class Collector(Node):
             sections = self.report.sections
             if 0 <= idx < len(sections):
                 # Strip citation tags so the Collector rewrites clean prose;
-                # _apply_citation_tags() will re-tag the revised content afterwards.
+                # apply_citation_tags() (utils/report_finalize) re-tags the revised content afterwards.
                 return "Current Section", strip_citation_tags(sections[idx]["content"])
             return "Current Section", "[No section content available]"
         return "Previous Text Production", self.report.get_last()
@@ -126,78 +126,6 @@ class Collector(Node):
         return bool(self.report.validation_directive) or bool(
             getattr(self.report, "removal_authorized", False)
         )
-
-    def _execute(self, input, spatial_info, temporal_info, **kwargs):
-        if not spatial_info:
-            # Allow execution in directive-driven SECTION_REVIEW — the REVISION DIRECTIVE
-            # is already in the context block; no Reviewer/DataAnalyst input is needed.
-            if not (self._is_revision_phase() and self.report.validation_directive):
-                return
-        if not self._data_analyst_has_content(spatial_info):
-            if not self._is_revision_phase():
-                self.report.task = "[SECTION_SKIPPED — ASSIGN NEXT SECTION]"
-            return
-        execution_trace = kwargs.get("execution_trace", None)
-
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        if execution_trace:
-            execution_trace.trace[-1]["Collector"]["prompt"] = system_prompt + user_prompt
-        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response1 = self.llm.gen(message, calling_agent="Collector")
-        if execution_trace:
-            execution_trace.trace[-1]["Collector"]["response"] = response1
-
-        clean = response1.strip()
-        # The progress summary is only needed when real prose was produced —
-        # summarizing a sentinel like [REMOVE_SECTION] wastes an LLM call.
-        response2 = self.report.progress
-        if clean and clean not in _SENTINEL_OUTPUTS:
-            system_prompt, user_prompt = self._progress_prompt(self.report.progress, response1)
-            message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-            response2 = self.llm.gen(message, calling_agent="Collector")
-
-        new_sources = self.source_buffer.flush()
-        if self._is_revision_phase():
-            # Section targeting is always resolved by the pipeline (review_section_idx),
-            # never by parsing LLM output — this eliminates wrong-section replacements.
-            section_id = self._extract_section_id_from_review_index()
-            if not section_id:
-                logger.error(
-                    "SECTION_REVIEW: could not resolve section ID from review index — correction skipped."
-                )
-            elif clean == "[REMOVE_SECTION]":
-                if not self._removal_is_authorized():
-                    logger.error(
-                        f"SECTION_REVIEW: [REMOVE_SECTION] for '{section_id}' has no backing "
-                        f"directive or Reviewer removal instruction — section left unchanged."
-                    )
-                elif self.report.remove_section(section_id):
-                    logger.info(f"SECTION_REVIEW: section '{section_id}' removed per directive.")
-                else:
-                    logger.error(f"SECTION_REVIEW: section '{section_id}' not found — removal skipped.")
-            elif clean in _SENTINEL_OUTPUTS or not clean:
-                # Collector echoed a sentinel instead of writing prose — leave section unchanged.
-                logger.warning(
-                    f"SECTION_REVIEW: Collector output sentinel '{clean}' instead of prose — section unchanged."
-                )
-            elif self.report.replace_section(section_id, response1, new_sources):
-                self.report.progress = response2
-            else:
-                logger.error(
-                    f"SECTION_REVIEW: section '{section_id}' not found in report — correction skipped."
-                )
-        elif not clean or clean in _SENTINEL_OUTPUTS:
-            # No prose produced — never append an empty or sentinel-only section.
-            logger.warning(
-                f"Collector produced no section prose ({clean!r}) — nothing appended."
-            )
-            self.report.task = "[SECTION_SKIPPED — ASSIGN NEXT SECTION]"
-        else:
-            self.report.append(response1, response2, new_sources)
-            self.report.task = "[SECTION_COMPLETE — ASSIGN NEXT SECTION]"
-        if execution_trace:
-            execution_trace.trace[-1]["Collector"]["report_state"] = self.report.content
-        return response1
 
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         if not spatial_info:

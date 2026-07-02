@@ -30,15 +30,19 @@ from qmix_report_writer.handcrafted_graph.phases import PhaseConfig, PhaseType, 
 from qmix_report_writer.handcrafted_graph.scheduler import RoundScheduler, SkipStrategy
 from qmix_report_writer.handcrafted_graph.state import PhaseState
 from qmix_report_writer.handcrafted_graph.prompts.handcrafted_prompt_set import _extract_section_directive
+from qmix_report_writer.handcrafted_graph.validation import (
+    build_section_windows, decompose_validation_directive,
+    revalidation_sections, validation_windows,
+)
 from qmix_report_writer.agents.collector import _ABSENCE_RE
 from qmix_report_writer.utils.globals import PromptTokens, CompletionTokens, ReportState, ExecutionTrace, SourceBuffer
+from qmix_report_writer.utils.report_finalize import (
+    apply_citation_tags, build_bibliography, generate_abstract,
+)
+from qmix_report_writer.utils.trace import init_trace_round, trace_spatial_edges
 
 logger = logging.getLogger("handcrafted_graph")
 
-# ------------------------------------------------------------------
-# Citation tagging — sentence-level n-gram overlap constants
-# ------------------------------------------------------------------
-_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])(\s+)(?=[A-Z"\'])')
 # Matches an explicit removal instruction in a Reviewer critique. Used to
 # authorize [REMOVE_SECTION] — the Collector refuses the sentinel otherwise.
 _REMOVAL_REQUEST_RE = re.compile(
@@ -52,60 +56,6 @@ _REMOVAL_REQUEST_RE = re.compile(
 # Round-A output that carries no blueprint content. Requires >=3 chars inside the
 # brackets so a stray single-letter token like "[A]" is not mistaken for a sentinel.
 _BRACKET_SENTINEL_RE = re.compile(r'^\[[A-Z0-9_ ]{3,}\]')
-_TOKEN_RE          = re.compile(r'[a-zA-Z0-9]+')
-_MIN_TOKEN_LEN        = 5   # minimum token length to be considered meaningful
-_MIN_CITATION_OVERLAP = 5   # shared tokens required to assign a citation
-_MIN_SENTENCE_TOKENS  = 5   # sentence must have this many tokens to be a candidate
-
-# The model sometimes names a source inline in its prose (e.g. quoting the
-# filename and page it drew from) rather than leaving the sentence for the
-# citation pass to tag. _apply_citation_tags() rewrites these inline references
-# into proper [cite:N, p.X] tags alongside the overlap-based tagging. A source
-# filename is an arXiv-style "*.pdf". Two surface forms are handled:
-#   1. Bracketed:  "[2105.06979.pdf | Page: 26]", "[2605.30554.pdf, Page 2 and 11]",
-#                  "[1711.02644.pdf, Page 4]", "[2605.30554.pdf]",
-#                  "[Source: 9308022.pdf | Page: 29]" (optional "Source:" prefix)
-#   2. Prose:      "Source 2105.06979.pdf (Page 2)", "(2605.26692.pdf)", "Source 0410066.pdf"
-_INLINE_FILE = r'[A-Za-z0-9][A-Za-z0-9._-]*\.pdf'
-_INLINE_PAGES = r'(?:\|\s*|,\s*)?(?:Pages?|pp?\.)\s*:?\s*([0-9][0-9,\s]*(?:and\s*[0-9]+)?)'
-_INLINE_REF_BRACKET_RE = re.compile(
-    rf'\[\s*(?:Sources?\s*:?\s*)?({_INLINE_FILE})\s*(?:{_INLINE_PAGES})?\s*\]',
-    re.IGNORECASE,
-)
-_INLINE_REF_SOURCE_RE = re.compile(
-    rf'(?:Sources?\s+)({_INLINE_FILE})\s*(?:\(\s*{_INLINE_PAGES}\s*\))?',
-    re.IGNORECASE,
-)
-_INLINE_REF_PAREN_RE = re.compile(rf'\(\s*({_INLINE_FILE})\s*\)')
-
-# Bare bracketed reference markers the model sometimes copies verbatim from a
-# retrieved chunk's own reference list, e.g. "Ref. [32]", "[12, 14]". The number
-# indexes that source's bibliography, never our [cite:N] scheme, so any such
-# marker whose number is not among the [cite:N] tags applied to the same
-# sentence is a stray reference dropped by _strip_orphan_citation_markers().
-# The leading "\d" requirement means real "[cite:N]" tags (which start with "c")
-# are never matched.
-_ORPHAN_CITE_RE = re.compile(
-    r'(?:Refs?\.?|References?)?\s*\[\s*\d+(?:\s*[,&]\s*\d+)*\s*\]',
-    re.IGNORECASE,
-)
-
-_STOPWORDS = frozenset({
-    # 2–3 letter function words
-    "the", "and", "for", "are", "was", "its", "his", "her", "our", "has",
-    "had", "not", "but", "all", "can", "may", "one", "two", "any", "few",
-    "new", "via", "per", "non", "sub", "pre", "pro", "out", "off", "set",
-    "let", "yet", "nor", "use", "due", "far", "low", "top", "end", "key",
-    # 4+ letter common words
-    "that", "this", "with", "from", "have", "been", "which", "they", "their",
-    "also", "both", "such", "more", "when", "where", "than", "then", "into",
-    "onto", "upon", "these", "those", "there", "here", "what", "some", "each",
-    "over", "after", "under", "about", "through", "between", "along", "while",
-    "since", "using", "within", "without", "toward", "above", "below",
-    "during", "given", "often", "many", "most", "other", "only", "very",
-    "show", "shows", "shown", "note", "noted", "term", "terms", "well",
-    "thus", "hence", "which", "where", "when", "how", "now", "then",
-})
 
 
 class NoCorpusCoverageError(RuntimeError):
@@ -195,6 +145,7 @@ class HandcraftedGraph:
         max_tries: int = 3,
         max_time: int = 300,
         max_validation_attempts: int = 1,
+        finalize: bool = True,
     ) -> Tuple[List[Any], int]:
         """Run the full phase pipeline and return the finished report.
 
@@ -202,6 +153,9 @@ class HandcraftedGraph:
             input: {"task": "<report subject>"}
             max_tries: Retry attempts per node on failure.
             max_time: Per-node execution timeout in seconds.
+            finalize: Build the bibliography and generate the abstract at
+                assembly time (default). QMIX training episodes pass False to
+                skip these LLM/formatting passes (upgrade-plan D6).
 
         Returns:
             (answers, total_tokens) where answers is a single-element list
@@ -409,19 +363,19 @@ class HandcraftedGraph:
             self._clear_all_memory()
 
         # ── Assemble final report ──────────────────────────────────────────
-        self._build_bibliography()
         report = report_state.content
 
-        # Reader-facing abstract: generated over the FINAL body (post-validation,
-        # post-revision) so it reflects the report as actually shipped. Prepended
-        # as the first `## Abstract` section; the PDF exporter renders the title
-        # page separately, so this lands at the top of the body.
-        abstract = await self._generate_abstract(report_state)
-        if abstract:
-            report = f"## Abstract\n\n{abstract}\n\n" + report.lstrip()
-
-        if report_state.bibliography:
-            report = report.rstrip() + "\n\n" + report_state.bibliography
+        if finalize:
+            build_bibliography(report_state)
+            # Reader-facing abstract: generated over the FINAL body (post-validation,
+            # post-revision) so it reflects the report as actually shipped. Prepended
+            # as the first `## Abstract` section; the PDF exporter renders the title
+            # page separately, so this lands at the top of the body.
+            abstract = await generate_abstract(report_state, self._get_any_llm())
+            if abstract:
+                report = f"## Abstract\n\n{abstract}\n\n" + report.lstrip()
+            if report_state.bibliography:
+                report = report.rstrip() + "\n\n" + report_state.bibliography
 
         # Stamp the final report onto the last trace round's Collector slot. The
         # last entry is not always a normal round: pass-boundary markers
@@ -848,7 +802,7 @@ class HandcraftedGraph:
                 if overall_pbar is not None:
                     overall_pbar.update(1)
 
-                self._apply_citation_tags(idx)
+                apply_citation_tags(report_state, idx)
                 if self.execution_trace is not None:
                     self.execution_trace.trace[-1]["Collector"]["report_state"] = (
                         ReportState.instance().content
@@ -922,7 +876,7 @@ class HandcraftedGraph:
                 )
                 if overall_pbar is not None:
                     overall_pbar.update(1)  # account for skipped revision round
-                self._apply_citation_tags(idx)
+                apply_citation_tags(report_state, idx)
                 if self.execution_trace is not None:
                     self.execution_trace.trace[-1]["Collector"]["report_state"] = (
                         ReportState.instance().content
@@ -973,7 +927,7 @@ class HandcraftedGraph:
             if overall_pbar is not None:
                 overall_pbar.update(1)
 
-            self._apply_citation_tags(idx)
+            apply_citation_tags(report_state, idx)
             if self.execution_trace is not None:
                 self.execution_trace.trace[-1]["Collector"]["report_state"] = (
                     ReportState.instance().content
@@ -983,83 +937,14 @@ class HandcraftedGraph:
     # Window-aware phase execution (VALIDATION)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_section_windows(
-        sections: List[dict],
-        window_size: int = 6000,
-        overlap_sections: int = 1,
-    ) -> List[List[dict]]:
-        """Group sections into overlapping windows that fit within window_size chars.
-
-        Each window contains complete sections (no mid-section cuts), preserving
-        semantic boundaries. Consecutive windows share overlap_sections sections
-        so cross-boundary transitions are always visible in at least one window.
-
-        A minimum of 2 sections per window is enforced (unless fewer than 2 sections
-        remain) so that adjacent sections always appear together and the Reviewer can
-        detect cross-section duplication even when individual sections are large.
-        """
-        if not sections:
-            return []
-        windows: List[List[dict]] = []
-        i = 0
-        while i < len(sections):
-            window: List[dict] = []
-            total = 0
-            j = i
-            while j < len(sections):
-                section_len = len(sections[j]["content"])
-                # Enforce window_size limit only once we have ≥ 2 sections, so that
-                # a single oversized section never fills the window alone.
-                if total + section_len > window_size and len(window) >= 2:
-                    break
-                window.append(sections[j])
-                total += section_len
-                j += 1
-            windows.append(window)
-            # Stop once a window reaches the final section: the overlap advance
-            # would otherwise produce a trailing window containing only sections
-            # already covered (e.g. a redundant single-section window).
-            if j >= len(sections):
-                break
-            i += max(1, len(window) - overlap_sections)
-        return windows
-
-    @staticmethod
-    def _revalidation_sections(report_state) -> List[dict]:
-        """Sections to re-audit: every section named in the prior issues or directive.
-
-        For a cross-section contradiction the first-pass issue text names both
-        sections (e.g. "section_2 ... contradicts section_3 ...") and the
-        decomposed directive carries a per-section entry for each, so the union of
-        IDs parsed from both covers all sides of every issue. Returned in report
-        order. Falls back to the full report if no section IDs can be parsed.
-        """
-        text = f"{report_state.validation_directive or ''}\n{report_state.validation_issues or ''}"
-        nums = re.findall(r'section[_ ]?(\d+)', text, re.IGNORECASE)
-        ids = {f"section_{n}" for n in nums}
-        if not ids:
-            return list(report_state.sections)
-        named = [s for s in report_state.sections if s["id"] in ids]
-        return named or list(report_state.sections)
+    # Window building / re-validation scoping moved to validation.py (Stage 2.4);
+    # the class aliases keep existing callers and tests working unchanged.
+    _build_section_windows = staticmethod(build_section_windows)
+    _revalidation_sections = staticmethod(revalidation_sections)
 
     def _validation_windows(self, report_state, phase) -> List[List[dict]]:
-        """Group sections into review windows for the VALIDATION phase.
-
-        First pass: sliding overlapping windows bounded by window_size.
-        Re-validation pass (validation_issues set): a SINGLE window containing
-        every section referenced by the prior issues/directive, so a cross-section
-        fix is always verified with both sides visible at once. The sliding
-        windows cannot do this when the two contradicting sections fall in
-        different windows — a partial-view window can only guess, and a single
-        false "STILL PRESENT" vote fails the whole pass.
-        """
-        if report_state.validation_issues:
-            rv = self._revalidation_sections(report_state)
-            return [rv] if rv else []
-        return self._build_section_windows(
-            report_state.sections, phase.window_size, phase.window_overlap_sections
-        )
+        """Group sections into review windows (see validation.py)."""
+        return validation_windows(report_state, phase)
 
     async def _execute_window_aware_phase(
         self,
@@ -1325,46 +1210,12 @@ class HandcraftedGraph:
     # ------------------------------------------------------------------
 
     def _init_trace_round(self) -> None:
-        """Append a fresh round slot to the execution trace.
-
-        Schema mirrors QMIXGraph so StandaloneVisualizer works without changes:
-          - One entry per agent name (action=None for handcrafted runs)
-          - "RAG" entry (populated later by Researcher agent)
-          - "Collector" entry with report_state snapshot
-          - "exec_order" list (populated as agents execute)
-        """
-        round_data: Dict[str, Any] = {
-            name: {
-                "action": None,
-                "message_to": [],
-                "prompt": None,
-                "response": None,
-                "time": None,
-                "completion_tokens": None,
-            }
-            for name in self.agent_names
-        }
-        round_data["RAG"] = {"action": None, "message_to": [], "prompt": None, "response": None, "sources": []}
-        round_data["PBDS"] = {"action": None, "message_to": [], "prompt": None, "response": None}
-        if self.collector_id is not None:
-            round_data["Collector"]["report_state"] = ReportState.instance().content
-        round_data["exec_order"] = []
-        self.execution_trace.trace.append(round_data)
+        """Append a fresh round slot to the trace (schema in utils/trace.py)."""
+        init_trace_round(self.execution_trace, self.agent_names, self.collector_id)
 
     def _trace_spatial_edges(self) -> None:
-        """Pre-populate message_to from already-built spatial edges.
-
-        Called after _build_topology so the visualizer can draw arrows even
-        for agents whose prompt/response haven't been recorded yet.
-        RAG↔Researcher links are written inside researcher.py and are skipped here.
-        """
-        for node in self.nodes.values():
-            agent_name = node.agent_name
-            if agent_name not in self.execution_trace.trace[-1]:
-                continue
-            for succ in node.spatial_successors:
-                if succ.agent_name in self.execution_trace.trace[-1]:
-                    self.execution_trace.trace[-1][agent_name]["message_to"].append(succ.agent_name)
+        """Pre-populate message_to from built spatial edges (see utils/trace.py)."""
+        trace_spatial_edges(self.execution_trace, self.nodes)
 
     # ------------------------------------------------------------------
     # Utility
@@ -1379,503 +1230,10 @@ class HandcraftedGraph:
         combined_issues: str,
         report_state,
     ) -> str:
-        """Ask the LLM to decompose global validation issues into per-section actions.
-
-        Returns a bulleted list of `- section_N: <action>` items, or the raw
-        combined_issues string if the LLM call fails.
-        """
-        llm = self._get_any_llm()
-        if llm is None:
-            return combined_issues
-
-        system = (
-            "You are a report quality coordinator. A validation review found cross-section "
-            "issues in a multi-section scientific report. Decompose each issue into concrete, "
-            "unambiguous revision instructions.\n\n"
-            "CRITICAL RULES:\n"
-            "1. For factual contradictions where the SAME value is stated differently in "
-            "multiple sections: pick ONE authoritative value (prefer the one cited with a "
-            "specific source page) and list EVERY section that must be updated to use it. "
-            "Never say 'reconcile' or 'align' — always give the exact value to use.\n"
-            "2. For content duplication: name the section to keep and the section to shorten. "
-            "Give the shortening section a specific UNIQUE angle to retain so it cannot end up "
-            "saying the same thing as the section it is being differentiated from.\n"
-            "3. For severe transitions: name which section's opening or closing sentence to revise.\n"
-            "4. CRITICAL — `section_N` labels are INTERNAL identifiers the reader never sees. "
-            "No section identifier (section_1, section_2, ...) may appear ANYWHERE in your "
-            "output: not in the instruction, and not inside any replacement text you quote. "
-            "This is the most common failure on repetition fixes — do NOT condense a duplicate "
-            "by cross-referencing another section, e.g. 'established in section_2', 'derived in "
-            "section_3', 'the parametrization from section_4', or 'as in section_6'. Instead "
-            "either state the point self-containedly in condensed form, or refer to it by its "
-            "topic in plain words (e.g. 'as established for even-even nuclei'). Each instruction "
-            "must stand alone and reference only physical facts, observational evidence, or "
-            "source citations — never another section."
+        """Decompose validation issues into per-section actions (see validation.py)."""
+        return await decompose_validation_directive(
+            combined_issues, report_state, self._get_any_llm()
         )
-        section_list = report_state.list_sections(verbose=True)
-        user = (
-            f"### Report sections\n{section_list}\n\n"
-            f"### Identified issues\n{combined_issues}\n\n"
-            "Output ONLY a bulleted list using this exact format:\n"
-            "  - <section_id>: <specific action with exact value if applicable>\n\n"
-            "One bullet per section that needs changing. The section_id is used ONLY as the "
-            "bullet label — never write it inside the action text or inside any quoted "
-            "replacement prose (see rule 4). Any text you put in quotes will be inserted "
-            "verbatim into the report, so it must read as self-contained prose. "
-            "If the same factual value must appear in "
-            "multiple sections, list each section separately and give EACH a distinct angle or "
-            "sub-topic so they do not duplicate each other. "
-            "Use exact section IDs from the list above for the bullet labels only. "
-            "Skip praise or general observations."
-        )
-        message = [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user},
-        ]
-        try:
-            response = await llm.agen(message, calling_agent="LeadArchitect")
-            return response.strip() if response else combined_issues
-        except Exception as exc:
-            logger.warning(f"[{self.id}] Directive decomposition failed: {exc}")
-            return combined_issues
-
-    async def _generate_abstract(self, report_state) -> str:
-        """Write a concise reader-facing abstract for the finished report.
-
-        Runs once at assembly time over the final body content, so it reflects
-        the report after all validation/revision is complete. Returns the
-        abstract paragraph (no heading), or "" if no body exists or the call
-        fails — callers must treat "" as "skip the abstract".
-        """
-        body = (report_state.content or "").strip()
-        if not body:
-            return ""
-
-        llm = self._get_any_llm()
-        if llm is None:
-            return ""
-
-        system = (
-            "You are a scientific editor writing the abstract for a completed "
-            "technical report. Summarise the report for a reader deciding whether "
-            "to read it.\n\n"
-            "RULES:\n"
-            "1. Write ONE self-contained paragraph of roughly 150-250 words.\n"
-            "2. Cover the report's scope/objective, the approach or evidence it "
-            "draws on, its key findings, and its main conclusions — in that order.\n"
-            "3. Plain expository prose. Do NOT include a heading, a 'In this report' "
-            "preamble, bullet points, or section references of any kind.\n"
-            "4. Do NOT include citation tags (e.g. [cite:3]), bibliography numbers, "
-            "or figure/section labels. The abstract must read as standalone prose.\n"
-            "5. Use only information present in the report body below — do not "
-            "introduce claims, numbers, or conclusions that are not in the text."
-        )
-        user = (
-            f"### Report subject\n{report_state.task}\n\n"
-            f"### Report body\n{body}\n\n"
-            "Write the abstract now. Output ONLY the abstract paragraph, with no "
-            "heading and no surrounding commentary."
-        )
-        message = [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user},
-        ]
-        try:
-            response = await llm.agen(message, calling_agent="LeadArchitect")
-        except Exception as exc:
-            logger.warning(f"[{self.id}] Abstract generation failed: {exc}")
-            return ""
-
-        abstract = (response or "").strip()
-        if not abstract:
-            return ""
-
-        # Strip a leading "Abstract"/"## Abstract" heading if the model added one
-        # despite the instruction (we supply the heading ourselves at assembly).
-        abstract = re.sub(r"(?i)^\s*#*\s*abstract\s*[:\-]?\s*\n+", "", abstract).strip()
-        # Remove any stray citation tags so the abstract stays self-contained.
-        abstract = re.sub(r"\s*\[cite:[^\]]*\]", "", abstract).strip()
-        return abstract
-
-    # ------------------------------------------------------------------
-    # Bibliography
-    # ------------------------------------------------------------------
-
-    # Matches new arXiv format (e.g. 2605.30554) and old format (e.g. 0208016 / 9804027).
-    _ARXIV_NEW_RE = re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?\.pdf$", re.IGNORECASE)
-    _ARXIV_OLD_RE = re.compile(r"^(\d{7})(v\d+)?\.pdf$", re.IGNORECASE)
-
-    def _build_bibliography(self) -> None:
-        """Build the final bibliography text using per-entry citation counts.
-
-        bibliography_map is populated incrementally by _apply_citation_tags —
-        only sources that were actually cited in the text have entries there.
-        All other collected sources are listed under Consulted Sources (no tag).
-
-        Must be called after all _apply_citation_tags() calls.
-        """
-        report_state = ReportState.instance()
-        bib_map = report_state.bibliography_map
-        counts  = report_state.citation_counts
-
-        if not report_state.sources:
-            logger.warning(f"[{self.id}] Bibliography: no sources collected — skipping.")
-            return
-
-        # Map each source filename to the bibliographic metadata (title/author/year)
-        # carried on its retrieved chunks. First non-empty wins per source.
-        meta_by_source: dict = {}
-        for doc in report_state.sources:
-            src = (doc.get("source") or "").strip()
-            if not src or src in meta_by_source:
-                continue
-            fields = {k: (doc.get(k) or "").strip() for k in ("title", "author", "year")}
-            if any(fields.values()):
-                meta_by_source[src] = fields
-
-        cited_lines: list = ["## Bibliography\n"]
-        for source_name, num in sorted(bib_map.items(), key=lambda x: x[1]):
-            c = counts.get(num, 0)
-            count_tag = f" *({c} citation{'s' if c != 1 else ''})*"
-            cited_lines.append(
-                self._format_bib_entry(num, source_name, meta_by_source.get(source_name)) + count_tag
-            )
-
-        seen: set = set()
-        consulted_lines: list = []
-        for doc in report_state.sources:
-            src = (doc.get("source") or "").strip()
-            if src and src not in bib_map and src not in seen:
-                seen.add(src)
-                consulted_lines.append(
-                    self._format_consulted_entry(src, meta_by_source.get(src))
-                )
-
-        report_state.bibliography = "\n".join(cited_lines)
-        if consulted_lines:
-            report_state.bibliography += (
-                "\n\n### Consulted Sources\n\n" + "\n".join(consulted_lines)
-            )
-
-        logger.info(
-            f"[{self.id}] Bibliography built: "
-            f"{len(cited_lines) - 1} cited, {len(consulted_lines)} consulted-only."
-        )
-
-    @classmethod
-    def _arxiv_id_of(cls, source_name: str) -> str:
-        """Return the arXiv id encoded in the filename, or '' if it is not an arXiv PDF."""
-        m = cls._ARXIV_NEW_RE.match(source_name) or cls._ARXIV_OLD_RE.match(source_name)
-        return m.group(1) if m else ""
-
-    @classmethod
-    def _compose_reference(cls, source_name: str, meta: Optional[dict]) -> str:
-        """Build a proper reference string from available metadata.
-
-        Renders "Author. “Title”. Year. (identifier)" using whatever fields are
-        present, always keeping the source filename as a locator so [cite:N] tags
-        remain traceable. Falls back to a filename-first entry when no
-        bibliographic metadata was extracted for the document.
-        """
-        meta = meta or {}
-        title = (meta.get("title") or "").strip()
-        author = (meta.get("author") or "").strip()
-        year = (meta.get("year") or "").strip()
-        arxiv_id = cls._arxiv_id_of(source_name)
-
-        # Identifier suffix: arXiv id (when present) plus the filename locator.
-        ident_bits = []
-        if arxiv_id:
-            ident_bits.append(f"arXiv:{arxiv_id}")
-        ident_bits.append(source_name)
-        ident = ", ".join(ident_bits)
-
-        parts = []
-        if author:
-            parts.append(author if author.endswith(".") else f"{author}.")
-        if title:
-            # Curly quotes become proper LaTeX quotes after markdown conversion.
-            parts.append(f"“{title}”.")
-        if year:
-            parts.append(f"{year}.")
-
-        if parts:
-            return " ".join(parts) + f" ({ident})"
-
-        # No descriptive metadata — keep the legacy filename-first rendering.
-        if arxiv_id:
-            return f"**{source_name}** *(arXiv:{arxiv_id})*"
-        ext = source_name.rsplit(".", 1)[-1].upper() if "." in source_name else ""
-        type_tag = f" *({ext})*" if ext else ""
-        return f"**{source_name}**{type_tag}"
-
-    @classmethod
-    def _format_bib_entry(cls, num: int, source_name: str, meta: Optional[dict] = None) -> str:
-        """Return one markdown bibliography line for the given source."""
-        return f"[{num}] " + cls._compose_reference(source_name, meta)
-
-    @classmethod
-    def _format_consulted_entry(cls, source_name: str, meta: Optional[dict] = None) -> str:
-        """Return one markdown consulted-sources line (no citation number)."""
-        return "- " + cls._compose_reference(source_name, meta)
-
-    # ------------------------------------------------------------------
-    # Citation tagging
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _tokenize(text: str) -> frozenset:
-        """Return a frozenset of meaningful tokens from text.
-
-        Keeps alphanumeric tokens of length >= _MIN_TOKEN_LEN that are not in
-        _STOPWORDS.  Numbers are kept at length >= 3 so that values like "154"
-        or "360" contribute to overlap scoring alongside longer word tokens.
-        """
-        result = set()
-        for t in _TOKEN_RE.findall(text.lower()):
-            if t in _STOPWORDS:
-                continue
-            # Numbers: keep at >= 3 chars; words: keep at >= _MIN_TOKEN_LEN
-            if t.isdigit():
-                if len(t) >= 3:
-                    result.add(t)
-            elif len(t) >= _MIN_TOKEN_LEN:
-                result.add(t)
-        return frozenset(result)
-
-    def _apply_citation_tags(self, section_idx: int) -> None:
-        """Insert citation tags into a section using sentence-level n-gram overlap.
-
-        For each non-heading line in the section, sentences are split on
-        punctuation boundaries.  Each sentence is scored against the RAG chunks
-        that were retrieved when the section was drafted.  When the shared
-        meaningful-token count meets _MIN_CITATION_OVERLAP, a [cite:N, p.X] tag
-        is appended after the sentence (or [cite:N] if no page info is stored).
-
-        The updated content is written back via replace_section() so that the
-        sources list for the section is preserved unchanged.
-        """
-        report_state = ReportState.instance()
-        sections = report_state.sections
-        if not (0 <= section_idx < len(sections)):
-            return
-
-        section = sections[section_idx]
-        sources = section.get("sources", [])
-        bib_map = report_state.bibliography_map  # mutated in-place on first citation
-
-        # Known source filenames (global, case-insensitive) used to resolve
-        # inline references. Includes sources already numbered in earlier sections.
-        known_lc: Dict[str, str] = {}
-        for doc in report_state.sources:
-            s = doc.get("source", "").strip()
-            if s:
-                known_lc.setdefault(s.lower(), s)
-        for s in bib_map:
-            known_lc.setdefault(s.lower(), s)
-
-        # Pre-tokenize each source chunk; bib numbers are assigned lazily.
-        chunk_refs: List[Tuple[frozenset, str, Optional[str]]] = []
-        for doc in sources:
-            src = doc.get("source", "").strip()
-            if not src:
-                continue
-            page = doc.get("page")
-            page_str = str(page) if page and str(page) != "N/A" else None
-            chunk_refs.append((self._tokenize(doc.get("content", "")), src, page_str))
-
-        # Nothing to do if we can neither score overlap nor resolve inline refs.
-        if not chunk_refs and not known_lc:
-            return
-
-        new_lines: List[str] = []
-        tagged_count = 0
-        inline_count = 0
-        orphan_count = 0
-
-        for line in section["content"].split("\n"):
-            # Preserve headings and blank lines as-is.
-            if not line.strip() or line.lstrip().startswith("#"):
-                new_lines.append(line)
-                continue
-
-            # Split into (sentence, separator, sentence, separator, …) preserving
-            # the inter-sentence whitespace via the capturing group in the regex.
-            parts = _SENTENCE_SPLIT_RE.split(line)
-            new_parts: List[str] = []
-
-            for j, part in enumerate(parts):
-                # Odd-indexed parts are the captured whitespace separators.
-                if j % 2 != 0:
-                    new_parts.append(part)
-                    continue
-
-                # First rewrite any inline source references the model wrote in
-                # this sentence into proper [cite:N, p.X] tags.
-                if known_lc:
-                    part, n_inline = self._rewrite_inline_references(
-                        part, known_lc, bib_map, report_state
-                    )
-                    inline_count += n_inline
-
-                # Then run overlap-based tagging on the (possibly updated) sentence.
-                sent_tok = self._tokenize(part) if chunk_refs else frozenset()
-                if chunk_refs and len(sent_tok) >= _MIN_SENTENCE_TOKENS:
-                    # Collect matching pages grouped by source name.
-                    pages_by_src: Dict[str, List[str]] = {}
-                    for chunk_tok, src_name, page_str in chunk_refs:
-                        if len(sent_tok & chunk_tok) >= _MIN_CITATION_OVERLAP:
-                            if src_name not in pages_by_src:
-                                pages_by_src[src_name] = []
-                            if page_str and page_str not in pages_by_src[src_name]:
-                                pages_by_src[src_name].append(page_str)
-
-                    # Assign bib numbers lazily on first citation, then sort by number.
-                    for src_name in pages_by_src:
-                        if src_name not in bib_map:
-                            bib_map[src_name] = len(bib_map) + 1
-
-                    tags: List[str] = []
-                    for src_name, pages in sorted(pages_by_src.items(), key=lambda x: bib_map[x[0]]):
-                        bib_num = bib_map[src_name]
-                        if not pages:
-                            tag = f"[cite:{bib_num}]"
-                        elif len(pages) == 1:
-                            tag = f"[cite:{bib_num}, p.{pages[0]}]"
-                        else:
-                            tag = f"[cite:{bib_num}, pp.{','.join(pages)}]"
-                        # Skip if this document is already cited in this sentence.
-                        if not re.search(rf'\[cite:{bib_num}[,\]]', part):
-                            tags.append(tag)
-                            report_state.citation_counts[bib_num] = (
-                                report_state.citation_counts.get(bib_num, 0) + 1
-                            )
-
-                    if tags:
-                        # Insert tags before the trailing sentence-ending punctuation.
-                        trailing_m = re.search(r'([.!?])\s*$', part)
-                        if trailing_m:
-                            pos = trailing_m.start()
-                            part = part[:pos] + " " + " ".join(tags) + part[pos:]
-                        else:
-                            part = part.rstrip() + " " + " ".join(tags)
-                        tagged_count += len(tags)
-
-                # Finally drop stray numeric reference markers (e.g. "Ref. [32]")
-                # the model copied from a source chunk that don't correspond to a
-                # [cite:N] tag applied to this sentence.
-                part, n_orphan = self._strip_orphan_citation_markers(part)
-                orphan_count += n_orphan
-                new_parts.append(part)
-
-            new_lines.append("".join(new_parts))
-
-        if tagged_count > 0 or inline_count > 0 or orphan_count > 0:
-            report_state.replace_section(section["id"], "\n".join(new_lines))
-            logger.info(
-                f"[{self.id}] Section {section_idx + 1}: "
-                f"{tagged_count} citation tag(s) inserted, "
-                f"{inline_count} inline reference(s) rewritten, "
-                f"{orphan_count} stray marker(s) removed."
-            )
-        else:
-            logger.info(
-                f"[{self.id}] Section {section_idx + 1}: "
-                f"no citation matches above threshold — section unchanged."
-            )
-
-    def _rewrite_inline_references(
-        self,
-        text: str,
-        known_lc: Dict[str, str],
-        bib_map: Dict[str, int],
-        report_state,
-    ) -> Tuple[str, int]:
-        """Rewrite inline source references in one sentence into citation tags.
-
-        Handles bracketed forms (``[file.pdf | Page: 26]`` and the
-        ``[Source: file.pdf | Page: 26]`` variant with an inline ``Source:``
-        prefix), ``Source file.pdf (Page 2)`` prose, and bare ``(file.pdf)``
-        mentions. Only references whose
-        filename resolves to a known source are rewritten; unknown filenames are
-        left untouched. Bib numbers are assigned lazily (matching the overlap
-        pass) and ``citation_counts`` is updated per new tag. At most one tag is
-        kept per source per sentence — the same rule the overlap pass enforces —
-        so a source already cited in the sentence (by an existing tag, a prior
-        inline reference, or one the overlap pass will add) is never duplicated;
-        the redundant inline reference text is dropped instead.
-
-        Returns ``(new_text, n_changes)``.
-        """
-        # Bib numbers already cited in this sentence. Seeded from any tags
-        # already present and grown as we rewrite, so we never emit two tags for
-        # the same source. \d+ captures the full number, so "1" never matches
-        # inside "[cite:12]".
-        present_nums = set(re.findall(r'\[cite:(\d+)', text))
-        n = 0
-
-        def _build_tag(num: int, pages: List[str]) -> str:
-            if not pages:
-                return f"[cite:{num}]"
-            if len(pages) == 1:
-                return f"[cite:{num}, p.{pages[0]}]"
-            return f"[cite:{num}, pp.{','.join(pages)}]"
-
-        def _repl(m: "re.Match") -> str:
-            nonlocal n
-            src = known_lc.get(m.group(1).strip().lower())
-            if src is None:
-                return m.group(0)  # unknown filename — leave the prose as written
-            pages = re.findall(r'\d+', m.group(2)) if m.re.groups >= 2 and m.group(2) else []
-            if src not in bib_map:
-                bib_map[src] = len(bib_map) + 1
-            num = bib_map[src]
-            n += 1
-            if str(num) in present_nums:
-                return ""  # source already cited in this sentence — drop reference
-            present_nums.add(str(num))
-            report_state.citation_counts[num] = (
-                report_state.citation_counts.get(num, 0) + 1
-            )
-            return _build_tag(num, pages)
-
-        out = _INLINE_REF_BRACKET_RE.sub(_repl, text)
-        out = _INLINE_REF_SOURCE_RE.sub(_repl, out)
-        out = _INLINE_REF_PAREN_RE.sub(_repl, out)
-
-        if n:
-            # Tidy whitespace / empty parens left by removed references.
-            out = re.sub(r'\(\s*\)', '', out)
-            out = re.sub(r'[ \t]{2,}', ' ', out)
-            out = re.sub(r'\s+([.,;:])', r'\1', out)
-        return out, n
-
-    def _strip_orphan_citation_markers(self, text: str) -> Tuple[str, int]:
-        """Remove stray bare numeric reference markers from a sentence.
-
-        The model occasionally copies a bracketed reference marker straight out
-        of a retrieved chunk (e.g. ``Ref. [32]``), where the number indexes that
-        source's own reference list rather than this report's bibliography. The
-        report only ever cites sources with ``[cite:N, p.X]`` tags, so a bare
-        ``[N]`` marker is never a valid citation — it is always dropped to keep a
-        consistent format and avoid duplicated references. Real ``[cite:N, p.X]``
-        tags are not matched by the marker pattern, so they are left untouched.
-
-        Returns ``(new_text, n_removed)``.
-        """
-        n = 0
-
-        def _repl(m: "re.Match") -> str:
-            nonlocal n
-            n += 1
-            return ""
-
-        out = _ORPHAN_CITE_RE.sub(_repl, text)
-        if n:
-            # Tidy whitespace left where markers were removed.
-            out = re.sub(r'[ \t]{2,}', ' ', out)
-            out = re.sub(r'\s+([.,;:])', r'\1', out)
-        return out, n
 
     def _get_node_by_name(self, agent_name: str) -> Optional[Node]:
         for node in self.nodes.values():

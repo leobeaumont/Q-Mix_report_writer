@@ -58,19 +58,6 @@ class LeadArchitect(Node):
         strategy = re.sub(r"<task>.*?</task>", "", response, flags=re.DOTALL).strip()
         return current_task, strategy
 
-    def _execute(self, input, spatial_info, temporal_info, **kwargs):
-        execution_trace = kwargs.get("execution_trace", None)
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        if execution_trace:
-            execution_trace.trace[-1]["LeadArchitect"]["prompt"] = system_prompt + user_prompt
-        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = self.llm.gen(message, calling_agent="LeadArchitect")
-        if execution_trace:
-            execution_trace.trace[-1]["LeadArchitect"]["response"] = response
-        current_task, strategy = self._parse_response(response)
-        self.report.task = current_task
-        return f"{strategy}\n\n**Assigned task:** {current_task}"
-
     async def _async_execute(self, input, spatial_info, temporal_info, **kwargs):
         execution_trace = kwargs.get("execution_trace", None)
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
