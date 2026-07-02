@@ -26,6 +26,9 @@ import shortuuid
 from tqdm import tqdm
 
 from qmix_report_writer.graph.node import Node
+from qmix_report_writer.handcrafted_graph.controller import (
+    HandcraftedRoundController, RoundController,
+)
 from qmix_report_writer.handcrafted_graph.phases import PhaseConfig, PhaseType, RoundTopology, PHASE_SEQUENCE
 from qmix_report_writer.handcrafted_graph.scheduler import RoundScheduler, SkipStrategy
 from qmix_report_writer.handcrafted_graph.state import PhaseState
@@ -79,6 +82,10 @@ class HandcraftedGraph:
         skip_strategy: How optional agents decide whether to participate.
         execution_trace: Whether to record an execution trace for analysis.
         phases: Override the default phase sequence (useful for ablations).
+        controller: Round decision-maker for the PLANNING/RESEARCH/DRAFTING
+                    rounds (see controller.py). None (default) builds a
+                    HandcraftedRoundController from skip_strategy, reproducing
+                    the phase tables + scheduler behavior exactly.
     """
 
     def __init__(
@@ -88,6 +95,7 @@ class HandcraftedGraph:
         skip_strategy: SkipStrategy = SkipStrategy.ALWAYS_INCLUDE,
         execution_trace: bool = False,
         phases: Optional[List[PhaseConfig]] = None,
+        controller: Optional[RoundController] = None,
     ) -> None:
         self.id = shortuuid.ShortUUID().random(length=4)
         self.llm_name = llm_name
@@ -99,6 +107,13 @@ class HandcraftedGraph:
 
         self._init_nodes()
         self._inject_prompt_set()
+
+        self.controller = controller or HandcraftedRoundController(
+            nodes=self.nodes,
+            collector_id=self.collector_id,
+            skip_strategy=skip_strategy,
+            llm=self._get_any_llm(),
+        )
 
         self.node_ids = list(self.nodes.keys())
         self.phase_state = PhaseState.instance()
@@ -388,6 +403,8 @@ class HandcraftedGraph:
             if "Collector" in last_round:
                 last_round["Collector"]["report_state"] = report
 
+        await self.controller.on_run_end()
+
         tokens_after = PromptTokens.instance().value + CompletionTokens.instance().value
         total_tokens = int(tokens_after - tokens_before)
 
@@ -406,7 +423,10 @@ class HandcraftedGraph:
         overall_pbar: Optional[tqdm] = None,
     ) -> None:
         self._clear_all_memory()
+        self.controller.on_phase_start(phase.name)
 
+        # This scheduler serves ONLY the scripted correction phases below.
+        # PLANNING/RESEARCH/DRAFTING participation is owned by the controller.
         scheduler = RoundScheduler(
             nodes=self.nodes,
             collector_id=self.collector_id,
@@ -416,7 +436,7 @@ class HandcraftedGraph:
 
         if phase.name == PhaseType.DRAFTING:
             await self._execute_drafting_phase(
-                input, phase, scheduler, max_tries, max_time, overall_pbar
+                input, phase, max_tries, max_time, overall_pbar
             )
             return
 
@@ -444,9 +464,10 @@ class HandcraftedGraph:
         for round_idx in range(phase.max_rounds):
             topology = phase.round_topologies[round_idx % n_patterns]
 
-            active_agents = await scheduler.get_active_agents(
-                topology, round_idx, task_input=input
+            plan = await self.controller.round_plan(
+                phase.name, round_idx, topology, self.nodes, input
             )
+            active_agents = plan.active_agents
 
             if overall_pbar is not None:
                 overall_pbar.set_description(
@@ -467,7 +488,7 @@ class HandcraftedGraph:
                 f"active={sorted(active_agents)}"
             )
 
-            self._build_topology(topology, active_agents)
+            self._build_topology_edges(plan.edges, active_agents)
             self._connect_temporal()
 
             # Initialise trace slot and pre-populate spatial edges before nodes run.
@@ -475,11 +496,14 @@ class HandcraftedGraph:
                 self._init_trace_round()
                 self._trace_spatial_edges()
 
-            await self._execute_round(input, active_agents, max_tries, max_time)
+            await self._execute_round(
+                input, active_agents, max_tries, max_time, actions=plan.actions
+            )
 
             self._update_memory()
             self._clear_spatial()
             self.phase_state.increment_round()
+            await self.controller.on_round_end(phase.name, round_idx)
 
             if phase.name == PhaseType.PLANNING:
                 la_node = self._get_node_by_name("LeadArchitect")
@@ -554,7 +578,6 @@ class HandcraftedGraph:
         self,
         input: Dict[str, str],
         phase: PhaseConfig,
-        scheduler: RoundScheduler,
         max_tries: int,
         max_time: int,
         overall_pbar: Optional[tqdm] = None,
@@ -588,20 +611,24 @@ class HandcraftedGraph:
                     overall_pbar.set_description(
                         f"[{phase.name.value.upper()}] round {round_idx + 1}/{phase.max_rounds}"
                     )
-                active_agents = await scheduler.get_active_agents(
-                    topology, round_idx, task_input=input
+                plan = await self.controller.round_plan(
+                    phase.name, round_idx, topology, self.nodes, input
                 )
+                active_agents = plan.active_agents
                 if not active_agents:
                     break
-                self._build_topology(topology, active_agents)
+                self._build_topology_edges(plan.edges, active_agents)
                 self._connect_temporal()
                 if self.execution_trace is not None:
                     self._init_trace_round()
                     self._trace_spatial_edges()
-                await self._execute_round(input, active_agents, max_tries, max_time)
+                await self._execute_round(
+                    input, active_agents, max_tries, max_time, actions=plan.actions
+                )
                 self._update_memory()
                 self._clear_spatial()
                 self.phase_state.increment_round()
+                await self.controller.on_round_end(phase.name, round_idx)
                 if overall_pbar is not None:
                     overall_pbar.update(1)
             return
@@ -620,22 +647,26 @@ class HandcraftedGraph:
                 overall_pbar.set_description(
                     f"[DRAFTING] section {i + 1}/{n_sections} — prep"
                 )
-            active_agents = await scheduler.get_active_agents(
-                prep_topology, 0, task_input=input
+            plan = await self.controller.round_plan(
+                PhaseType.DRAFTING, 0, prep_topology, self.nodes, input
             )
+            active_agents = plan.active_agents
             logger.info(
                 f"  [drafting] Section {i + 1}/{n_sections} prep: "
                 f"active={sorted(active_agents)}"
             )
-            self._build_topology(prep_topology, active_agents)
+            self._build_topology_edges(plan.edges, active_agents)
             self._connect_temporal()
             if self.execution_trace is not None:
                 self._init_trace_round()
                 self._trace_spatial_edges()
-            await self._execute_round(input, active_agents, max_tries, max_time)
+            await self._execute_round(
+                input, active_agents, max_tries, max_time, actions=plan.actions
+            )
             self._update_memory()
             self._clear_spatial()
             self.phase_state.increment_round()
+            await self.controller.on_round_end(PhaseType.DRAFTING, 0)
             if overall_pbar is not None:
                 overall_pbar.update(1)
 
@@ -658,10 +689,12 @@ class HandcraftedGraph:
                     f"[DRAFTING] section {i + 1}/{n_sections} — write"
                 )
 
+            round_actions = None
             if blueprint_ready:
-                # Reuse Round A's blueprint. The DataAnalyst node still holds that
-                # output in node.outputs (memory is not cleared between a section's
-                # two rounds), so wiring a one-way DataAnalyst → Collector spatial
+                # SCRIPTED round (no controller consult): reuse Round A's
+                # blueprint. The DataAnalyst node still holds that output in
+                # node.outputs (memory is not cleared between a section's two
+                # rounds), so wiring a one-way DataAnalyst → Collector spatial
                 # edge delivers it via get_spatial_info() exactly as if the
                 # DataAnalyst had produced it this round — without re-executing it.
                 # This is the same forwarding pattern used in SECTION_REVIEW
@@ -676,24 +709,29 @@ class HandcraftedGraph:
                 if da_node is not None and collector_node is not None:
                     da_node.add_successor(collector_node, "spatial")
             else:
-                active_agents = await scheduler.get_active_agents(
-                    write_topology, 1, task_input=input
+                plan = await self.controller.round_plan(
+                    PhaseType.DRAFTING, 1, write_topology, self.nodes, input
                 )
+                active_agents = plan.active_agents
+                round_actions = plan.actions
                 logger.info(
                     f"  [drafting] Section {i + 1}/{n_sections} write: "
                     f"Round A produced no blueprint — retrying research. "
                     f"active={sorted(active_agents)}"
                 )
-                self._build_topology(write_topology, active_agents)
+                self._build_topology_edges(plan.edges, active_agents)
 
             self._connect_temporal()
             if self.execution_trace is not None:
                 self._init_trace_round()
                 self._trace_spatial_edges()
-            await self._execute_round(input, active_agents, max_tries, max_time)
+            await self._execute_round(
+                input, active_agents, max_tries, max_time, actions=round_actions
+            )
             self._update_memory()
             self._clear_spatial()
             self.phase_state.increment_round()
+            await self.controller.on_round_end(PhaseType.DRAFTING, 1)
             if overall_pbar is not None:
                 overall_pbar.update(1)
 
@@ -1053,11 +1091,16 @@ class HandcraftedGraph:
         active_agents: Set[str],
         max_tries: int,
         max_time: int,
+        actions: Optional[Dict[str, int]] = None,
     ) -> None:
         """Execute all active nodes in topological order (Kahn's algorithm).
 
         Nodes not in active_agents are completely skipped — their spatial edges
         are simply not built, so they never appear in the execution queue.
+
+        actions: optional per-agent action ids from a RoundPlan. When an agent
+        has one, it is forwarded to async_execute (rendered into the prompt's
+        context block) and recorded in the trace. None = handcrafted mode.
         """
         # Build in-degree map over active nodes only.
         active_ids = {
@@ -1093,13 +1136,17 @@ class HandcraftedGraph:
 
             t0 = time.time()
             tokens_before = CompletionTokens.instance().value
+            node_kwargs: Dict[str, Any] = {"execution_trace": self.execution_trace}
+            node_action = (
+                actions.get(self.nodes[current_id].agent_name)
+                if actions is not None else None
+            )
+            if node_action is not None:
+                node_kwargs["action"] = node_action
             for attempt in range(max_tries):
                 try:
                     await asyncio.wait_for(
-                        self.nodes[current_id].async_execute(
-                            input,
-                            execution_trace=self.execution_trace,
-                        ),
+                        self.nodes[current_id].async_execute(input, **node_kwargs),
                         timeout=max_time,
                     )
                     break
@@ -1119,6 +1166,8 @@ class HandcraftedGraph:
                 if agent_name in self.execution_trace.trace[-1]:
                     self.execution_trace.trace[-1][agent_name]["time"] = elapsed
                     self.execution_trace.trace[-1][agent_name]["completion_tokens"] = tokens_used
+                    if node_action is not None:
+                        self.execution_trace.trace[-1][agent_name]["action"] = node_action
                 self.execution_trace.trace[-1]["exec_order"].append(agent_name)
 
             # Unlock successors.
@@ -1136,12 +1185,16 @@ class HandcraftedGraph:
     # ------------------------------------------------------------------
 
     def _build_topology(self, topology: RoundTopology, active_agents: Set[str]) -> None:
-        """Wire spatial edges for this round based on the topology definition.
+        """Wire spatial edges for this round from a RoundTopology definition."""
+        self._build_topology_edges(topology.edges, active_agents)
+
+    def _build_topology_edges(self, edges, active_agents: Set[str]) -> None:
+        """Wire spatial edges for this round from an explicit edge list.
 
         Only edges where both endpoints are in active_agents are created.
         """
         self._clear_spatial()
-        for sender_name, receiver_name in topology.edges:
+        for sender_name, receiver_name in edges:
             sender = self._get_node_by_name(sender_name)
             receiver = (
                 self.nodes.get(self.collector_id)

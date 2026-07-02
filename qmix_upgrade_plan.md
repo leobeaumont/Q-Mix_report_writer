@@ -105,37 +105,38 @@
 - **Test:** guard `test_revalidation_sections_and_directive_extract` (re-point import on move); `_build_section_windows` already pinned by `test_no_trailing_singleton_window` in `test_review_pipeline_fixes.py`.
 - **Done note:** 2026-07-02 — `handcrafted_graph/validation.py` (build_section_windows / revalidation_sections / validation_windows / decompose_validation_directive, the latter now taking the llm as a parameter). Graph keeps staticmethod ALIASES (`_build_section_windows = staticmethod(...)`) + thin delegates, so no test import needed re-pointing — both old and new suites green unchanged. `graph.py`: 1900 → 1257 lines across Stage 2.
 
-### 2.5 `[~]` Regression checkpoint #1
+### 2.5 `[x]` Regression checkpoint #1
 - **What:** Re-run the Stage 0 protocol (tests + smoke run) and compare against the baseline: same phase sequence in the trace, same section count, bibliography/abstract present, no new warnings. Record findings here.
 - **Test:** full guard suite must be 20/20 PASS (with the Stage-2 import re-points applied); acceptance suite must show 0 FAIL.
-- **Done note:** 2026-07-02 — test half done: full offline battery green after Stage 1+2 (49 passed across 7 suites; guards 20/20; acceptance 3 PASS / 9 PEND / 0 FAIL). **Smoke half pending:** waiting on a user-run full report generation (with `--trace`) to compare against `tests/baseline_refs/2026-07-02/` (same phase sequence, sections written, bibliography + abstract present).
+- **Done note:** 2026-07-02 — offline battery green (49 passed; guards 20/20; acceptance 3 PASS / 9 PEND / 0 FAIL). User smoke run (2026-07-02_164359, same task as baseline) vs baseline trace: 45 rounds both, identical per-round exec patterns, 6 sections both, abstract + bibliography present. Sole difference: PBDS absent from research rounds — environment, not regression (no workbook configured in the launch shell; baseline run had `QMIX_REPORT_PBDS_WORKBOOK` set; PBDS code untouched, its 19 tests green). Checkpoint PASSED.
 
 ---
 
 ## Stage 3 — The controller seam in `HandcraftedGraph` (D2)
 
-### 3.1 `[ ]` Define the `RoundController` interface
+### 3.1 `[x]` Define the `RoundController` interface
 - **What:** New module (suggest `handcrafted_graph/controller.py` — it is part of the graph's contract, not QMIX-specific). Interface (async where it may call LLMs/networks):
   - `round_plan(phase, round_idx, topology, nodes, task_input) -> RoundPlan` where `RoundPlan = (active_agents: set[str], edges: list[(str, str)], actions: dict[str, int] | None)` — `actions` is what gets rendered into prompts and recorded in the trace (`None` = handcrafted mode).
   - `on_round_end(phase, round_idx) -> None` — hook for episode recording / reward events (no-op by default).
   - `on_phase_start(phase)` / `on_run_end()` — lifecycle hooks (no-op by default).
 - **Scope note (document in the module docstring):** the controller is consulted **only** where `phase.round_topologies[...]` + `scheduler.get_active_agents(...)` are consulted today — the generic phase loop, the DRAFTING prep round, and the DRAFTING round-B *retry* branch. Scripted rounds (blueprint-reuse write, SECTION_REVIEW, VALIDATION, directive-bypass) never consult it.
 - **Test:** acceptance `test_stage3_controller_seam` (PEND→PASS; asserts the interface hooks + the `controller=None` default on `HandcraftedGraph.__init__`).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `handcrafted_graph/controller.py`: `RoundPlan` dataclass (active_agents, edges, actions), `RoundController` base (async `round_plan`, `on_round_end`, `on_run_end`; sync `on_phase_start`), scope documented in the module docstring. Hook scope narrowed vs the sketch: `on_round_end` fires after every PLANNING/RESEARCH/DRAFTING round (incl. the scripted write round — that's where appends happen, which the reward hook needs); correction phases fire no hooks (never run in training, D6). Acceptance test PASS.
 
-### 3.2 `[ ]` `HandcraftedRoundController` (default) + wire the seam
+### 3.2 `[x]` `HandcraftedRoundController` (default) + wire the seam
 - **What:** Implement the default controller wrapping today's logic (topology tables + `RoundScheduler` with the configured skip strategy). `HandcraftedGraph.__init__` gains `controller: RoundController | None = None` → defaults to `HandcraftedRoundController` built from the existing `skip_strategy` arg (public API unchanged). Replace the direct table/scheduler consultations in `_execute_phase` / `_execute_drafting_phase` with `controller.round_plan(...)`; add the `on_round_end` / `on_phase_start` calls at the existing round boundaries.
 - **What (prompt path):** `_execute_round` forwards the plan's per-agent `action` (when not `None`) into `async_execute(..., action=...)` so the prompt context block can render it — handcrafted runs pass nothing and behave as today.
 - **Test:** guards pinning what the default controller must reproduce: `test_phase_sequence_invariants`, `test_scheduler_temporal_heuristic`, `test_drafting_blueprint_usable`, `test_parse_section_titles` — all must stay green with the seam in place.
-- **Done note:** —
+- **Done note:** 2026-07-02 — controller consulted at exactly the four planned spots (generic loop, drafting fallback loop, drafting prep, drafting round-B retry); blueprint-reuse write round marked SCRIPTED in code. `HandcraftedRoundController` holds one scheduler for the run (stateless → equivalent to the old per-phase construction). `_build_topology` split into `_build_topology_edges` (plan-driven) + a thin table wrapper (scripted paths unchanged). `_execute_round` gained `actions=` — forwards per-agent action into `async_execute` and records it in the trace slot; handcrafted plans carry `actions=None` so prompts/trace stay byte-identical. `on_run_end` fires at the end of `arun`. Guards 20/20.
 
-### 3.3 `[ ]` Training-mode run shape verification
+### 3.3 `[x]` Training-mode run shape verification
 - **What:** Verify (with a stub controller and a tiny/dummy LLM) that `HandcraftedGraph(phases=[PLANNING, RESEARCH, DRAFTING]).arun(..., max_validation_attempts=0, finalize=False)` cleanly skips the correction stages: no SECTION_REVIEW/VALIDATION rounds, no directive decomposition on empty reviewer output, no abstract/bibliography, no crash in the validation-loop bookkeeping (progress bars, trace stamps). Fix whatever edge cases surface — this is the exact configuration Stage 4.6 training uses (D6).
-- **Done note:** —
+- **Test:** NEW `tests/test_training_mode_shape.py` — full offline `arun` (stub RAG via patch, scripted mock LLMs) in the exact D6 training configuration; asserts outline→2 sections written, Reviewer never called, no SECTION_REVIEW/VALIDATION in phase history, no bibliography/abstract. Add it to every future battery run.
+- **Done note:** 2026-07-02 — passed first try, no edge cases surfaced: 12 rounds (2 planning + 6 research + 2×2 drafting), validation loop degrades cleanly to "finalising as-is" with an empty correction-phase list, trace stamping guards hold.
 
-### 3.4 `[ ]` Regression checkpoint #2
+### 3.4 `[~]` Regression checkpoint #2
 - **What:** Stage 0 protocol again on the default-controller path. The handcrafted pipeline with no arguments changed must produce an equivalent run (trace round sequence identical to checkpoint #1).
-- **Done note:** —
+- **Done note:** 2026-07-02 — test half done: full battery green post-seam (50 passed across 8 suites incl. the new training-shape test; guards 20/20; acceptance 4 PASS / 8 PEND / 0 FAIL). **Smoke half pending:** user-run full generation on the default-controller path, compared against the 2.5 run.
 
 ---
 
@@ -251,9 +252,9 @@ The handcrafted write round is scripted: when Round A produced a usable blueprin
 |-------|-------|------|
 | 0 — Guardrails | 1 | 1 |
 | 1 — Legacy removal | 2 | 2 |
-| 2 — Shared refactors | 5 | 4 (2.5 awaiting smoke run) |
-| 3 — Controller seam | 4 | 0 |
+| 2 — Shared refactors | 5 | 5 |
+| 3 — Controller seam | 4 | 3 (3.4 awaiting smoke run) |
 | 4 — QMIX decision layer | 8 | 0 |
 | 5 — Observations | 2 | 0 |
 | 6 — Docs & cleanup | 5 | 0 |
-| **Total** | **27** | **7** |
+| **Total** | **27** | **11** |
