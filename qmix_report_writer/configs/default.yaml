@@ -43,6 +43,15 @@ qmix:
     epsilon_end: 0.05
     log_interval: 10
     save_interval: 50
+  obs:
+    # Observation text features (task + progress summary). By default they are
+    # cheap byte-hashes. Set use_embeddings: true to replace them with
+    # nomic-embed-text embeddings (served by the same local Ollama as the RAG),
+    # truncated to embedding_dim. embedding_dim sets the width of EACH text slot
+    # for both modes, so leaving it at 16 keeps obs_dim identical whether
+    # embeddings are on or off (a clean A/B for the training rework).
+    use_embeddings: false
+    embedding_dim: 16
 
 reward:
   report_quality_weight: 1.0

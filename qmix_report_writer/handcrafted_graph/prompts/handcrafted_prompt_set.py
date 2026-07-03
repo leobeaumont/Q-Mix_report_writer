@@ -504,7 +504,7 @@ class HandcraftedPromptSet(PromptSet):
 
     @staticmethod
     def get_constraint(role: str) -> str:
-        return ROLE_CONSTRAINTS.get(role, ROLE_CONSTRAINTS.get("Technical Writer", ""))
+        return ROLE_CONSTRAINTS.get(role, ROLE_CONSTRAINTS.get("Collector", ""))
 
     def get_schema(self, role: str) -> dict:
         return JSON_SCHEMA.get(role, {})

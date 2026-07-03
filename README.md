@@ -2,65 +2,58 @@
 
 **REQUIRES: Python >= 3.10**
 
-QMIX-based multi-agent reinforcement learning that learns optimal communication topologies for LLM agent collaboration. Maximizes task accuracy while minimizing token usage.
+Agentic RAG report writer whose multi-agent **communication topology is chosen by QMIX** — reinforcement learning that decides who talks to whom each round to maximise report quality while minimising token usage.
 
-## Architecture
+## Two pipelines, one architecture
 
-**Networked MMDP** with centralized training, decentralized execution:
+The report-writing machinery — phases, section iteration, sentinel protocols, review/validation, citations, bibliography, abstract — lives in `handcrafted_graph/` and is **deterministic scaffolding**: code owns targeting, sequencing, and state; the LLM only fills content. The two pipelines differ in exactly one component, the round decision-maker, injected through a `RoundController` seam:
 
-1. **GNN Message Passing** — Agents communicate through a learned graph topology
-2. **Per-Agent Q-Network** — GNN -> GRU (temporal) -> MLP (Q-values)
-3. **QMIX Mixing Network** — Monotonic: $\frac{\delta Q_{tot}}{\delta Q_i} >= 0$
-4. **Reward** = $\Delta_{report \, score} \times w_{report \, score} + \Delta_{token \, goal} \times w_{token \, goal}$, where $\Delta_{report \, score}$ is the variation of the report score compared to its last state and $\Delta_{token \, goal}$ is the variation of the token goal score compared to its last state. The token goal score is calculated using a Gaussian curve centered around the token goal.
+- **Handcrafted pipeline** (`handcrafted_graph/`, entry `run_handcrafted`): the default `HandcraftedRoundController` picks each round's participants and message edges from hand-designed phase topology tables. No training required — the quality reference.
+- **QMIX pipeline** (`qmix/`, entries `run_qmix` / `run_qmix_train`): a `QMIXRoundController` replaces only that decision, choosing communication actions with the learned policy while reusing all the handcrafted scaffolding as its environment.
 
+**QMIX learner** — Networked MMDP, centralized training / decentralized execution:
 
-## QMIX Actions
+1. **GNN message passing** — agents communicate through the chosen graph topology.
+2. **Per-agent Q-network** — GNN → GRU (temporal) → MLP (Q-values).
+3. **Monotonic mixing network** — $\frac{\partial Q_{tot}}{\partial Q_i} \geq 0$.
+4. **Reward** = $\Delta_{report\,score}\times w_{report} + \Delta_{token\,goal}\times w_{token}$ — the change in report score and in the Gaussian token-goal score since the previous report append. Reward events fire only when the report actually grows, spread over the rounds that produced the addition.
 
-| Action | Name | Communication Pattern |
+> The training algorithm and the report-quality evaluator are slated for a separate rework; the pipeline integration around them (masks, reward trigger, observations) is current.
+
+## QMIX actions (v2)
+
+Per **acting** agent, per round (the Collector never selects actions). Validity is constrained by per-phase / per-role **masks** (`qmix/action_masks.py`) so the policy only chooses among sensible options.
+
+| Action | Name | Communication pattern |
 |--------|------|----------------------|
-| 0 | `solo_process` | No communication |
-| 1 | `broadcast_all` | Send to all neighbors |
-| 2 - 5 | `selective_query` | Query one neighbor (one for each agent) |
-| 6 | `aggregate_refine` | Receive from all, refine |
-| 7 | `append` | Send to a collector node |
-| 8 | `terminate` | Output the content of collector node |
+| 0 | `no_op` | Skip this round entirely — no LLM call, no retrieval |
+| 1 | `broadcast_all` | Send output to all other active acting agents |
+| 2–5 | `selective_query` | Send output to acting agent *i* (`i = action − 2`) |
+| 6 | `aggregate_refine` | Receive from all other active acting agents |
+| 7 | `append` | Send output to the Collector (report append) |
 
+Mask rules: self-targeting `selective_query` is always invalid; `append` is masked in PLANNING/RESEARCH/DRAFTING (the write round is scripted) and always for the Reviewer; `no_op` is masked for agents a round hard-requires. `terminate` was removed — episodes end when the phase pipeline completes.
 
 ## Quick Start
 
-On Gemini 3.1 Flash Lite Model:
+Runtime prerequisite: a running [Ollama](https://ollama.com) serving the generation model (`llm.default_model` in `configs/default.yaml`) and the embedding model `nomic-embed-text`. Ingest documents into the RAG store first (see *Using the package* below).
 
 ```bash
-cp .env.example .env       # Add your API key
-pip install -r requirements.txt
-# To Train and Test (LCB, HE, MMLU, AIME, B-AIME, HMMT)
-bash scripts/run_all_gemini.sh
-# To Test For HLE
-bash scripts/run_hle_gemini.sh
+pip install -e .
+
+# Handcrafted pipeline (no training) — the quality reference
+python -m experiments.run_handcrafted --task "Controlled fission and fusion reactions" --trace
+
+# QMIX training (topology policy) — writes a checkpoint under checkpoints/
+python -m experiments.run_qmix_train --num-episodes 50 --trace
+
+# QMIX inference with a trained policy — full pipeline, same artifacts as handcrafted
+python -m experiments.run_qmix --task "..." --model-path checkpoints/qmix_v2_<ts>.pt
 ```
 
+All three share the CLI surface `--task` / `--task-index`, `--llm`, `--trace`; the report runners add `--no-pdf`. Traces render with `python utils/visualization.py` (handcrafted → `handcrafted_trace.json`, QMIX → `qmix_trace.json`).
 
-On GPT-oss 120B Model:
-
-```bash
-cp .env.example .env       # Add your API key
-pip install -r requirements.txt
-# To Train and Test (LCB, HE, MMLU, AIME, B-AIME, HMMT)
-bash scripts/run_all_gpt.sh
-# To Test For HLE
-bash scripts/run_hle_gpt.sh
-```
-
-## Reproducibility
-
-Pre-trained QMIX checkpoints and evaluation results from our runs are included in the repository.
-
-### Checkpoints
-
-| Model | Path |
-|---|---|
-| GPT-OSS:120B | `checkpoints/qmix_unified.pt` |
-| Gemini Flash Lite | `checkpoints_gemini/qmix_unified.pt` |
+Checkpoints are produced by `run_qmix_train` (best-reward + interval saves) under `checkpoints/`; none are bundled.
 
 ## Project Structure
 
@@ -73,9 +66,9 @@ repo root, outside the package.
 Q-Mix_report_writer/             # repo root
 ├── qmix_report_writer/          # ── installable package ──────────────────
 │   ├── __init__.py              # public API (re-exports run_handcrafted)
-│   ├── handcrafted_graph/       # deterministic phase-based pipeline (+ runner)
-│   ├── qmix/                    # QMIX core (GNN, Q-networks, mixing, replay, trainer)
-│   ├── graph/                   # multi-agent graph execution engine
+│   ├── handcrafted_graph/       # phase pipeline + RoundController seam, runner, finalize/validation
+│   ├── qmix/                    # QMIX core (GNN, Q-nets, mixing, trainer) + controller, masks, observations, runner
+│   ├── graph/                   # base Node (spatial/temporal edges, execute interface)
 │   ├── agents/                  # agent roster (LeadArchitect, Researcher, ...)
 │   ├── llm/                     # LLM API layer (Ollama)
 │   ├── prompt/                  # prompt sets
@@ -305,15 +298,17 @@ The `handcrafted_graph/` module implements a deterministic, phase-ordered pipeli
 
 **Pipeline overview:**
 
-The pipeline is divided into 5 ordered phases. Each phase defines one or more round patterns that cycle until the phase's maximum round count is reached.
+The pipeline is divided into 5 ordered phases. The writing phases run one or more round patterns per phase; the correction phases iterate over the report's sections/windows in code.
 
-| Phase | Max rounds | Purpose |
+| Phase | Structure | Purpose |
 |-------|-----------|---------|
-| PLANNING | 2 | Evidence-first outline. Researcher scans corpus coverage before LeadArchitect commits to any section titles. |
-| RESEARCH | 6 | Iterative evidence gathering. LeadArchitect directs Researcher with specific queries; DataAnalyst synthesises raw evidence atoms into structured writing blueprints. |
-| DRAFTING | 10 | Section-by-section writing. LeadArchitect designates the section; DataAnalyst structures content; Collector writes and appends polished prose to the report. |
-| REVIEW | 2 | Reviewer audits the full draft for factual accuracy, logical coherence, and scientific rigour, then forwards structured critique to LeadArchitect. |
-| REVISION | 4 | LeadArchitect applies reviewer feedback. DataAnalyst prepares corrected content; Collector replaces flagged sections in-place (not append). |
+| PLANNING | 2 rounds | Evidence-first outline. Researcher scans corpus coverage before LeadArchitect commits to any section titles; the outline is parsed into `ReportState.planned_sections` (empty ⇒ `NoCorpusCoverageError`). |
+| RESEARCH | ≤6 rounds | Iterative evidence gathering. LeadArchitect directs Researcher with specific queries; DataAnalyst synthesises raw evidence into structured writing blueprints. |
+| DRAFTING | 2 rounds × planned section | Section-by-section writing driven in code. Prep round (LeadArchitect + Researcher + DataAnalyst) then a write round; a usable Round-A blueprint is forwarded straight to the Collector (skipping a redundant re-query). |
+| SECTION_REVIEW | per section | Reviewer audits one section at a time against its stored RAG chunks; DataAnalyst + Collector apply corrections in-place. Sections that pass are skipped. |
+| VALIDATION | sliding windows + synthesis | Reviewer checks overlapping section windows for cross-section contradictions / reworded redundancy / severe transitions, then a synthesis round votes `[VALIDATION_PASSED/FAILED]`. On failure a decomposed per-section directive drives a bounded re-review loop. |
+
+> Only the QMIX pipeline's controller consults the policy for round decisions, and only in the writing phases (PLANNING/RESEARCH/DRAFTING); the scripted correction phases run identically in both pipelines. QMIX **training** episodes run the writing phases only (no correction, no finalization).
 
 **Technical changes:**
 

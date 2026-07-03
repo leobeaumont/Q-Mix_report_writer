@@ -329,7 +329,6 @@ class StandaloneVisualizer:
         local_logos = {
             "RAG": "assets/DB.png",
             "LeadArchitect": "assets/compass.png",
-            "TechnicalWriter": "assets/quill.png",
             "Researcher": "assets/magnifier.png",
             "DataAnalyst": "assets/graph.png",
             "Reviewer": "assets/validation.png",

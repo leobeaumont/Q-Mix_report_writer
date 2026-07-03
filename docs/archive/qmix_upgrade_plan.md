@@ -181,48 +181,50 @@
 - **What:** A test controller that emits, through the *QMIX action vocabulary*, the plans the handcrafted tables would produce for PLANNING/RESEARCH/DRAFTING (e.g. Researcher `selective_query(LA)` in planning round 0…). Run both pipelines on the same task with the same seed/model and compare traces: active sets and edges per round must match. This proves the action→plan translation and the seam are faithful before any training happens.
 - **Test/Done note:** 2026-07-02 — NEW `tests/test_controller_fidelity.py` (offline, mocked LLM/RAG so both runs are deterministic): the vocabulary controller reproduces all 12 rounds of the handcrafted run with identical active sets and edges. Notably every handcrafted round pattern IS expressible in the 8-action vocabulary (aggregate_refine covers "active receiver", selective/broadcast cover the send patterns). PASS first try.
 
-### 4.8 `[~]` Regression checkpoint #3 + random-policy dry run
+### 4.8 `[x]` Regression checkpoint #3 + random-policy dry run
 - **What:** (a) Handcrafted default path still matches baseline. (b) `run_qmix_train` with an untrained network and small budgets (2 episodes, tiny model): no crashes, masks respected (assert in controller), episodes land in the buffer with sane shapes, reward events fire only on real appends, trace renders in the visualizer with actions shown.
-- **Done note:** 2026-07-02 — offline halves done: (a) full battery green (52 passed / 1 designed live-skip across 11 suites; guards 20/20; acceptance 10 PASS / 2 PEND — only the Stage-6 items pend). (b) NEW `tests/test_qmix_dry_run.py`: full random-policy (ε=1.0) episode through the real controller+seam offline — 10 steps recorded with correct shapes incl. masks, mask compliance on every step, 2 reward events on the 2 real appends, replay push + train_step loss computed. **Live half pending:** a user-run `python experiments/run_qmix_train.py --num-episodes 2 --trace` against real Ollama (needs the LLM judges), then check `qmix_trace.json` renders in the visualizer with actions shown.
+- **Done note:** 2026-07-02 — offline halves done: (a) full battery green (52 passed / 1 designed live-skip across 11 suites; guards 20/20; acceptance 10 PASS / 2 PEND — only the Stage-6 items pend). (b) NEW `tests/test_qmix_dry_run.py`: full random-policy (ε=1.0) episode through the real controller+seam offline — 10 steps recorded with correct shapes incl. masks, mask compliance on every step, 2 reward events on the 2 real appends, replay push + train_step loss computed. **Live half done 2026-07-03:** user ran `run_qmix_train --num-episodes 2 --trace` on Qwen3-30B — both episodes completed (no crash), nonzero rewards (0.262, 0.178), 15–17 steps each. Trace verified: 14/15 rounds carry recorded actions across the masked vocabulary; mask compliance exact in the LIVE run (no self-query — each agent avoids its own target index; no append anywhere). Two benign notes: (1) `loss=n/a` / `Steps: 0` is expected — `train_step` gates on buffer ≥ batch_size(32), so 2 episodes never train; (2) a `safe_json_parse` "Failed to parse" on one judge reply is EVALUATOR-side (out of scope, slated for rework), handled gracefully (returns {} → chunk scored 0 → reward still computed). Checkpoint PASSED.
 
 ---
 
 ## Stage 5 — Observation upgrade *(report 2.7)*
 
-### 5.1 `[ ]` Structured state features
+### 5.1 `[x]` Structured state features
 - **What:** Extend the obs builder (from 4.2) with: sections written, planned−written remaining, `len(content)/length_goal`, last append outcome (task sentinel is `SECTION_COMPLETE` vs `SECTION_SKIPPED` vs none), research-exhausted flag, per-agent last-output-is-sentinel flag, phase one-hot (moved from 4.2 if simpler to keep together). Recompute `obs_dim`/`state_dim` in one place used by both controller and trainer construction; old checkpoints are invalid (fine — none are, post-D3).
-- **Done note:** —
+- **Test:** NEW `tests/test_observations.py` (offline): dims match the matrix, phase one-hot tracks PhaseState, the 6 structured scalars reflect ReportState, per-agent sentinel flag fires.
+- **Done note:** 2026-07-03 — added 6 global scalars (`_structured_global_features`: written/10, remaining/10, capped length-ratio, append-complete, append-skipped, research-exhausted) shared by every agent + a per-agent last-output-is-sentinel flag. Phase one-hot was already present from 4.2 (kept). obs_dim 56 → 63; `get_obs_dim`/`get_state_dim` remain the single source, so the controller and `build_trainer` and every shape-test adapt automatically (dry-run/fidelity re-run green).
 
-### 5.2 `[ ]` Embedding features (flag-gated)
+### 5.2 `[x]` Embedding features (flag-gated)
 - **What:** Replace the byte-hash task/progress features with `nomic-embed-text` embeddings via the existing local Ollama embed path (see `rag_manager`'s direct `/api/embed` call): task embedded once per episode, progress summary re-embedded only after successful appends (cache), truncated/projected to a configurable dim (start 64). Config flag `qmix.obs.use_embeddings` so the training rework can A/B hash vs embeddings.
-- **Done note:** —
+- **Test:** default `use_embeddings: false` asserted in `test_observations.py` (offline path stays deterministic; the embed branch is exercised only in a live run with the flag on).
+- **Done note:** 2026-07-03 — `_embed_features` (direct `/api/embed` for `nomic-embed-text`, per-text cache, truncate/pad to slot width + L2-norm, **fails soft to byte-hash** on any transport error so obs-building never crashes). Config `qmix.obs.{use_embeddings=false, embedding_dim=16}`; `embedding_dim` sets EACH text slot width for both modes, so enabling embeddings at 16 keeps obs_dim identical (true A/B) and raising it grows obs_dim uniformly. Deviation from the sketch: chose `embedding_dim` default 16 (not 64) so the flag flip alone doesn't change obs_dim; the training rework can raise it.
 
 ---
 
 ## Stage 6 — Docs & final cleanup
 
-### 6.1 `[ ]` README rewrite *(report 0.9)*
+### 6.1 `[x]` README rewrite *(report 0.9)*
 - **What:** Update the QMIX sections: new architecture diagram (controller-in-handcrafted), v2 action table (8 actions, masks), phases-in-env, training/inference run modes; remove references to deleted scripts, the old checkpoints table (checkpoints are void post-D3/D5), and the outdated REVIEW/REVISION phase description (now SECTION_REVIEW/VALIDATION + retry loop). Link the report and this plan.
-- **Done note:** —
+- **Done note:** 2026-07-03 — rewrote the top (two-pipelines/controller-seam framing + MMDP learner + evaluator-rework caveat), the action table → v2 (8 actions, no_op, mask rules, terminate removed), Quick Start → the three real CLIs with the Ollama prerequisite (dropped the nonexistent Gemini/GPT `scripts/*.sh` and the void bundled-checkpoints table), the package-structure blurbs for `graph`/`qmix`/`handcrafted_graph`, and the 5-phase table → PLANNING/RESEARCH/DRAFTING/SECTION_REVIEW/VALIDATION with the controller-scope note. Left the deep "technical changes" changelog as build-history provenance (it still uses the old REVIEW/REVISION narrative but reads as history, not current reference).
 
-### 6.2 `[ ]` Roster cleanup — TechnicalWriter *(report non-port #2; OD-2 = (a) delete)*
+### 6.2 `[x]` Roster cleanup — TechnicalWriter *(report non-port #2; OD-2 = (a) delete)*
 - **What:** Delete `agents/technical_writer.py`, its import in `agents/__init__.py`, and its `redacting` prompt entries (Collector absorbed the role). Note that roster changes require revisiting selective-query target count and masks.
 - **Caveat found while writing tests:** the "Technical Writer" prompt entries are the *fallback* for unknown roles — `RedactingPromptSet.get_description/get_constraint` and `HandcraftedPromptSet.get_constraint` all default to `ROLE_*["Technical Writer"]`. Re-point those fallbacks (e.g. to the Collector entries or an explicit generic entry) BEFORE deleting the prompt entries.
 - **Test:** acceptance `test_stage6_2_technical_writer_deleted` (PEND→PASS; file gone, agents package imports cleanly, registry has no `TechnicalWriter` key).
-- **Done note:** —
+- **Done note:** 2026-07-03 — the caveat was real: re-pointed all three fallbacks (`redacting` get_description/get_constraint, handcrafted get_constraint) + `get_answer_prompt` default from "Technical Writer" to "Collector" (the role that absorbed writing) FIRST, then deleted both `Technical Writer` prompt entries, the roster-cycle line, `technical_writer.py`, its `__init__` import, and the visualizer icon entry. Verified: registry = 5 agents, unknown-role fallback returns the Collector template without raising, real roles unaffected. Acceptance PASS.
 
-### 6.3 `[ ]` Config finalization
+### 6.3 `[x]` Config finalization
 - **What:** `qmix:` section reflects reality (n_actions 8, obs flags, training defaults actually read by the runner — closing Stage 1.2's placeholder); prune anything still dead.
-- **Done note:** —
+- **Done note:** 2026-07-03 — mostly closed already by 1.2 (dead keys removed) + 4.6/5.2 (added `qmix.training.*`, `qmix.obs.*`). Verified end to end: no `n_actions`/`evaluation`/top-level `training` remnants; every key `build_trainer` and `observations` read is present; `build_trainer(5)` → n_actions 8, obs_dim 63. Action count stays code-defined (NUM_ACTIONS), not config. Left `pyproject.toml` deps (`datasets`, `huggingface-hub`, `jsonlines`) untouched — install-weight only, out of plan scope; flagged as a possible follow-up.
 
-### 6.4 `[ ]` `datasets/` pruning *(OD-3 = (a) delete)*
+### 6.4 `[x]` `datasets/` pruning *(OD-3 = (a) delete)*
 - **What:** Keep `datasets/tasks.py` (training task list — still used); delete the benchmark loaders (`gaia/hle/mmlu/humaneval/livecodebench/math/frontierscience/...`), `hf_loader.py`, the `DATASET_REGISTRY`/`get_dataset` machinery, and rewrite `datasets/__init__.py` to only expose `tasks` (keep `base_dataset.py` only if something still imports it).
 - **Test:** acceptance `test_stage6_4_datasets_pruned` (PEND→PASS; loaders gone, `datasets.tasks` still imports, package init clean).
-- **Done note:** —
+- **Done note:** 2026-07-03 — confirmed only `datasets.tasks` is imported externally (the 3 runners); deleted all 8 benchmark loaders + `base_dataset.py` + `hf_loader.py` (nothing imported them post-legacy-deletion), rewrote `datasets/__init__.py` to expose only `tasks`. Acceptance PASS; all 12 acceptance tests now green.
 
-### 6.5 `[ ]` Memory/report sync
+### 6.5 `[x]` Memory/report sync
 - **What:** Update `qmix_improvement_report.md` status header (plan executed) and the assistant memory files if architecture facts changed during implementation.
-- **Done note:** —
+- **Done note:** 2026-07-03 — plan complete: 27/27 items. Final offline battery green (68 tests / 12 suites; guards 20/20; acceptance 12/12 PASS, 0 pending). Added status banner to `qmix_improvement_report.md`; memory `project_qmix_pipeline.md` already rewritten to the v2 architecture (2026-07-02, refreshed here). Remaining beyond this plan: the training-algorithm + evaluator rework (always out of scope), and optional follow-ups noted in items (pyproject dep prune; embedding_dim raise; OD-1b policy-triggered append experiment).
 
 ---
 
@@ -254,7 +256,7 @@ The handcrafted write round is scripted: when Round A produced a usable blueprin
 | 1 — Legacy removal | 2 | 2 |
 | 2 — Shared refactors | 5 | 5 |
 | 3 — Controller seam | 4 | 4 |
-| 4 — QMIX decision layer | 8 | 7 (4.8 awaiting live dry run) |
-| 5 — Observations | 2 | 0 |
-| 6 — Docs & cleanup | 5 | 0 |
-| **Total** | **27** | **19** |
+| 4 — QMIX decision layer | 8 | 8 |
+| 5 — Observations | 2 | 2 |
+| 6 — Docs & cleanup | 5 | 5 |
+| **Total** | **27** | **27 ✅** |

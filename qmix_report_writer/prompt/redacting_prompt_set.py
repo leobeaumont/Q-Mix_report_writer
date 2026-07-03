@@ -21,7 +21,6 @@ roles = itertools.cycle([
     "Lead Architect",
     "Researcher",
     "Data Analyst",
-    "Technical Writer",
     "Reviewer",
 ])
 
@@ -71,25 +70,6 @@ Deliver zero-hallucination "Evidence Atoms" (discrete, factual units) to your te
 ### Responsibilities
 * **Fact Extraction:** Isolate hard data, technical primitives, and unique insights from RAG evidence.
 * **Logical Sequencing:** Follow rigorous progression.""",
-
-
-    "Technical Writer": """
-### Role: Technical Redactor
-Synthesizes logical frameworks and technical evidence into publication-quality prose for the Global Report State.
-
-### Objective
-Generate "Report-Ready" sections that are ready for professional scientific inclusion.
-
-### Responsibilities
-* **Decomposition:**
-    * You are not writing the full report, only a chunk of it.
-    * Use your context (messages / report state) to define the chunk to write. 
-* **Scientific Redaction:**
-    * Transform raw data and prototypes into cohesive formal paragraphs.
-    * Utilize standard scientific nomenclature and maintain a strictly objective tone.
-* **Citation Integration:**
-    * Attribue all evidence atoms and claims from the observation space.
-    * Format citations according to specific scientific requirements.""",
 
 
     "Reviewer": """
@@ -240,16 +220,6 @@ ROLE_CONSTRAINTS = {
 * **Verifiability:** Never create **RAG** data. Only label data as **RAG** if explicitly identified in your context.""",
 
 
-    "Technical Writer": """
-### Operational Constraints
-* **Output Result:** Return only the requested text; avoid all meta-talk.
-* **Zero Content Expansion:** Refine provided content only. Do not invent or introduce new concepts and data.
-* **Divide & Conquer:** You have many rounds, work incrementally. Decompose your work and process only one step. Avoid bloating output with currently useless information.
-* **Technical Precision:** Use quantitative descriptors and scientific terminology; avoid vague qualifiers.
-* **Context Priority:** Prioritize RAG data as absolute truth (even within agent messages). Trust the Current report state; treat other agent messages as low-priority context.
-* **Verifiability:** Cite document sources where possible; do not cite other agents.""",
-
-
     "Collector": """
 ### Operational Constraints
 * **Clean Output:** Return only the requested text, avoid all meta-talk.
@@ -332,10 +302,12 @@ class RedactingPromptSet(PromptSet):
 
     @staticmethod
     def get_constraint(role):
-        return ROLE_CONSTRAINTS.get(role, ROLE_CONSTRAINTS["Technical Writer"])
+        # Collector is the generic-writer fallback for any unlisted role
+        # (it absorbed the former Technical Writer role).
+        return ROLE_CONSTRAINTS.get(role, ROLE_CONSTRAINTS["Collector"])
 
     def get_description(self, role):
-        return ROLE_DESCRIPTION.get(role, ROLE_DESCRIPTION["Technical Writer"])
+        return ROLE_DESCRIPTION.get(role, ROLE_DESCRIPTION["Collector"])
     
     def get_schema(self, role):
         return JSON_SCHEMA.get(role, JSON_SCHEMA["Macro Scoring"])
@@ -348,7 +320,7 @@ class RedactingPromptSet(PromptSet):
         pass
 
     @staticmethod
-    def get_answer_prompt(question, role="Technical Writer"):
+    def get_answer_prompt(question, role="Collector"):
         return f"{question}"
 
     @staticmethod

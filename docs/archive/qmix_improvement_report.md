@@ -1,5 +1,7 @@
 # Porting handcrafted-pipeline improvements into the QMIX pipeline
 
+> **Status (2026-07-03): fully executed.** This report is the *why*; the *what/when/done* tracker is `qmix_upgrade_plan.md` (27/27 items complete). The QMIX pipeline is now the handcrafted phase pipeline with a `QMIXRoundController` in the round-decision seam; the legacy free-form `QMIXGraph` path was deleted. The training algorithm and report evaluator remain out of scope (separate rework).
+
 **Date:** 2026-07-02
 **Scope:** Everything the handcrafted pipeline (`qmix_report_writer/handcrafted_graph/`) does better than the QMIX prototype (`qmix_report_writer/graph/` + `qmix/` + `experiments/run_qmix_train.py`), organized as an implementation plan.
 **Out of scope (per project direction):** the internals of the training algorithm (`qmix_trainer.py`, replay buffer, network architectures) and the internals of the report evaluator (`experiments/eval.py` judges) — both will be fully reworked. However, the *integration points* between the pipeline and those two components (when the reward fires, what the observations contain) are pipeline-side and are covered here.
