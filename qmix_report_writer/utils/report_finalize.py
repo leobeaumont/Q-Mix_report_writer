@@ -18,7 +18,11 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 
-logger = logging.getLogger("report_finalize")
+# Module-qualified logger name ("qmix_report_writer.utils.report_finalize") so a
+# host attaching a handler to the "qmix_report_writer" logger (e.g. to surface
+# citation/bibliography progress in a UI) captures these records — parity with
+# the pre-extraction code, which logged under "handcrafted_graph".
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
 # Citation tagging — sentence-level n-gram overlap constants

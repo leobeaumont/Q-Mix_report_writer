@@ -34,26 +34,90 @@ Per **acting** agent, per round (the Collector never selects actions). Validity 
 
 Mask rules: self-targeting `selective_query` is always invalid; `append` is masked in PLANNING/RESEARCH/DRAFTING (the write round is scripted) and always for the Reviewer; `no_op` is masked for agents a round hard-requires. `terminate` was removed — episodes end when the phase pipeline completes.
 
-## Quick Start
+## Tutorial — using the pipelines
 
-Runtime prerequisite: a running [Ollama](https://ollama.com) serving the generation model (`llm.default_model` in `configs/default.yaml`) and the embedding model `nomic-embed-text`. Ingest documents into the RAG store first (see *Using the package* below).
+Everything runs locally against [Ollama](https://ollama.com); no data leaves the machine. If you just want a report, use the **handcrafted pipeline** (Step 2) — it needs no training. The QMIX steps (3–4) are for learning and using a topology policy.
+
+### Setup
 
 ```bash
 pip install -e .
 
-# Handcrafted pipeline (no training) — the quality reference
+# Ollama must serve two models: the generator and the embedder used by the RAG.
+ollama pull alibayram/Qwen3-30B-A3B-Instruct-2507   # llm.default_model in configs/default.yaml
+ollama pull nomic-embed-text                         # RAG embeddings (required)
+```
+
+PDF export additionally uses [Tectonic](https://tectonic-typesetting.github.io/); if it isn't on `PATH` it is auto-downloaded on first use (cached under `.tools/`).
+
+### Step 1 — Ingest documents into the RAG store
+
+The pipeline only writes what it can retrieve. Add your corpus once (persists in `chroma_data/`); re-run only when the corpus changes.
+
+```python
+from qmix_report_writer.tools.rag import RAGManager
+
+rag = RAGManager()
+rag.add_document_from_path("docs/paper.pdf")   # also .txt / .md / .docx
+```
+
+For a subject-wide corpus, `scripts/arxiv_ingest.py` bulk-fetches and ingests arXiv papers:
+
+```bash
+python scripts/arxiv_ingest.py --query "nuclear equation of state" --max-papers 100
+```
+
+### Step 2 — Generate a report (handcrafted pipeline)
+
+```bash
 python -m experiments.run_handcrafted --task "Controlled fission and fusion reactions" --trace
+```
 
-# QMIX training (topology policy) — writes a checkpoint under checkpoints/
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--task "<subject>"` | — | Report subject. Mutually exclusive with `--task-index`. |
+| `--task-index N` | `0` | Pick subject *N* from the built-in `datasets/tasks.py` list instead. |
+| `--llm <model>` | `configs/default.yaml` | Ollama generation model (must be pulled). |
+| `--skip-strategy` | `always_include` | Optional-agent participation: `always_include` (safest/most tokens), `temporal_heuristic` (skip agents with no prior output), `llm_gatecheck` (a cheap EXECUTE/SKIP call). |
+| `--trace` | off | Save `handcrafted_trace.json` for the visualizer. |
+| `--max-tries` | `3` | Retry attempts per agent on an LLM error. |
+| `--max-time` | `300` | Per-agent timeout (seconds). |
+
+The report (markdown + `.tex` + `.pdf`) lands in `output/<timestamp>_<slug>/`; the path is printed at the end.
+
+### Step 3 — Train a QMIX topology policy
+
+```bash
 python -m experiments.run_qmix_train --num-episodes 50 --trace
+```
 
-# QMIX inference with a trained policy — full pipeline, same artifacts as handcrafted
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--num-episodes N` | `qmix.training.num_episodes` (500) | Episodes to run; each writes one report (PLANNING→RESEARCH→DRAFTING only, no review/finalize). |
+| `--llm <model>` | config default | Generation model for the agents. |
+| `--save-path <path>` | `checkpoints/qmix_v2_<ts>.pt` | Checkpoint destination (best-reward + interval saves). |
+| `--resume <path>` | — | Continue training from an existing checkpoint. |
+| `--device` | `cpu` | `cpu` or `cuda`. |
+| `--trace` | off | Save each episode's trace to `qmix_trace.json`. |
+
+> Learning is gradient-gated: `train_step` only runs once the replay buffer holds ≥ `batch_size` (32) episodes, so `loss=n/a` / `Steps: 0` on short runs is expected, not a bug. Reward, network hyperparameters, and the action masks are configured under `qmix:` / `reward:` in `configs/default.yaml`.
+
+### Step 4 — Generate with the trained policy
+
+```bash
 python -m experiments.run_qmix --task "..." --model-path checkpoints/qmix_v2_<ts>.pt
 ```
 
-All three share the CLI surface `--task` / `--task-index`, `--llm`, `--trace`; the report runners add `--no-pdf`. Traces render with `python utils/visualization.py` (handcrafted → `handcrafted_trace.json`, QMIX → `qmix_trace.json`).
+Runs the **full** pipeline (all phases + citations, bibliography, abstract) with the learned topology, producing the same artifacts as Step 2. Flags mirror `run_handcrafted` plus `--model-path <checkpoint>` (omit for an untrained policy) and `--no-pdf` (skip LaTeX/PDF, keep the markdown). Without a checkpoint the policy is random — train first.
 
-Checkpoints are produced by `run_qmix_train` (best-reward + interval saves) under `checkpoints/`; none are bundled.
+### Outputs at a glance
+
+| Artifact | Location |
+|----------|----------|
+| Report (markdown / LaTeX / PDF) | `output/<timestamp>_<slug>/` |
+| Execution trace | `handcrafted_trace.json` / `qmix_trace.json` (render with `python utils/visualization.py`) |
+| Trained checkpoints | `checkpoints/` |
+| Vector DB | `chroma_data/` |
 
 ## Project Structure
 
@@ -82,7 +146,6 @@ Q-Mix_report_writer/             # repo root
 ├── tests/                       # test suite
 ├── checkpoints/                 # saved QMIX models
 ├── pyproject.toml               # package definition + dependencies
-├── requirements.txt
 └── (git-ignored runtime data: chroma_data/, output/, .tools/, *_trace.json)
 ```
 
@@ -109,18 +172,27 @@ default to the current working directory, so standalone use is unchanged):
 
 ## Using the package in a host project
 
-A short end-to-end walkthrough for embedding the report writer in another
-project. The public entry point is the async `run_handcrafted`.
+The report writer is published on **PyPI** as [`qmix_report_writer`](https://pypi.org/project/qmix_report_writer/), so a host project depends on it like any other library. This is a short end-to-end walkthrough for embedding it.
 
-**1. Install** — pin to a released version tag for reproducibility:
+**Public API.** The supported surface a host builds on:
+
+- `qmix_report_writer.run_handcrafted(...)` — the async report entry point.
+- `qmix_report_writer.tools.rag.RAGManager` — ingest / retrieve.
+- `qmix_report_writer.utils.config.configure(...)` (and the `QMIX_REPORT_*` env vars) — point the package at your store/model/host.
+- `qmix_report_writer.handcrafted_graph.graph.NoCorpusCoverageError` — raised when the corpus has no coverage for the requested subject.
+
+Pin the version you build against — internal modules may change between releases, but the surface above is what host integrations rely on.
+
+**1. Install** — from PyPI:
 
 ```bash
-pip install git+https://github.com/leobeaumont/Q-Mix_report_writer.git@v0.1.0
+pip install qmix_report_writer                 # latest release
+pip install qmix_report_writer==0.1.1          # pin a version (recommended for reproducibility)
 ```
 
-> Use `@main` for the latest stable code, or `@<commit-sha>` to pin an exact
-> commit. Pinning a tag is recommended so a given host build always resolves the
-> same code.
+> To track unreleased code instead, install from git:
+> `pip install "git+https://github.com/leobeaumont/Q-Mix_report_writer.git@main"`
+> (or `@<tag>` / `@<commit-sha>` to pin an exact point).
 
 > Runtime prerequisite: a running [Ollama](https://ollama.com) serving both the
 > generation model (see `llm.default_model` in `default.yaml`) and the embedding
