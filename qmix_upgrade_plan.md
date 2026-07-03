@@ -134,56 +134,56 @@
 - **Test:** NEW `tests/test_training_mode_shape.py` — full offline `arun` (stub RAG via patch, scripted mock LLMs) in the exact D6 training configuration; asserts outline→2 sections written, Reviewer never called, no SECTION_REVIEW/VALIDATION in phase history, no bibliography/abstract. Add it to every future battery run.
 - **Done note:** 2026-07-02 — passed first try, no edge cases surfaced: 12 rounds (2 planning + 6 research + 2×2 drafting), validation loop degrades cleanly to "finalising as-is" with an empty correction-phase list, trace stamping guards hold.
 
-### 3.4 `[~]` Regression checkpoint #2
+### 3.4 `[x]` Regression checkpoint #2
 - **What:** Stage 0 protocol again on the default-controller path. The handcrafted pipeline with no arguments changed must produce an equivalent run (trace round sequence identical to checkpoint #1).
-- **Done note:** 2026-07-02 — test half done: full battery green post-seam (50 passed across 8 suites incl. the new training-shape test; guards 20/20; acceptance 4 PASS / 8 PEND / 0 FAIL). **Smoke half pending:** user-run full generation on the default-controller path, compared against the 2.5 run.
+- **Done note:** 2026-07-02 — battery green post-seam (50 passed across 8 suites; guards 20/20; acceptance 4 PASS / 8 PEND / 0 FAIL). User smoke run (2026-07-02_172315): 55 rounds vs baseline 45 — expected LLM variance, not drift: this outline had 8 sections (vs 6) and the run exercised the validation-retry loop (decomposition + re-review markers present). Every round matches a legal phase topology; abstract + bibliography + 101 citation tags present. Checkpoint PASSED. Changes committed by user (e6755f0).
 
 ---
 
 ## Stage 4 — The QMIX decision layer
 
-### 4.1 `[ ]` Action space v2 + per-phase masks *(report 2.3, 2.4; D5)*
+### 4.1 `[x]` Action space v2 + per-phase masks *(report 2.3, 2.4; D5)*
 - **What:** Redefine in `qmix/agent_network.py`: `0 no_op` (agent does not execute this round — replaces `solo_process` semantics, *report 2.3*), `1 broadcast_all`, `2–5 selective_query(target 0–3)`, `6 aggregate_refine`, `7 append` → **NUM_ACTIONS = 8** (`terminate` dropped per D5). Note in code that "think privately" (old solo) can be re-added later if an ablation wants it.
 - **What:** New `qmix/action_masks.py`: `mask(phase, agent_name, round_ctx) -> bool[8]`. Initial rules: self-targeting `selective_query` always masked *(absorbs report 0.7)*; `append` masked in PLANNING/RESEARCH (and per **OD-1 = (a)** also in DRAFTING); `append` always masked for the Reviewer; `no_op` masked for agents that are hard-required by the phase (e.g. Researcher+LeadArchitect in PLANNING round 0) so a random policy cannot produce a dead round. Keep the rules table in one visible place — they encode the handcrafted topology knowledge as constraints.
 - **Test:** acceptance `test_stage4_1_action_space_v2` + `test_stage4_1_action_masks` (PEND→PASS; encode 8 actions/no terminate/`no_op` at 0, and the append-mask rules incl. OD-1a); guard `test_action_space_consistency` stays green across the 9→8 change.
-- **Done note:** —
+- **Done note:** 2026-07-02 — `agent_network.py` action list v2 (NUM_ACTIONS=8, `no_op` at 0, terminate gone, "think privately" re-add noted in code). `qmix/action_masks.py`: `mask()` + `masks_for_round()`, all rules in one table — self-query always masked, append masked in P/R/D (OD-1a; flip `_APPEND_MASKED_PHASES` for OD-1b experiments) and always for Reviewer, `no_op` masked for topology-required agents. Both acceptance tests PASS.
 
-### 4.2 `[ ]` `QMIXRoundController`
+### 4.2 `[x]` `QMIXRoundController`
 - **What:** New `qmix/qmix_controller.py` implementing the Stage 3.1 interface: builds observations (v1 = existing 51-dim features + phase one-hot; v2 lands in Stage 5), calls masked action selection, translates actions → `RoundPlan` (`no_op` → agent excluded from `active_agents`; `broadcast`/`selective`/`aggregate` → edges among active agents; `append` → edge to Collector), records `(obs, actions, adj, global_state)` per round, sets `done` on run end. Holds the GRU hidden state across rounds; `train` flag switches ε-greedy vs greedy. Port `get_observation_features` / `get_global_state` / adjacency derivation from the deleted `QMIXGraph` (git) into this module or a small `qmix/observations.py`.
 - **Edge-case policy (document):** cycle-denied edges fall back exactly like legacy (edge dropped); an all-`no_op` round advances the round counter with no execution (naturally discouraged by reward-per-token, and prevented in required rounds by masks).
 - **Test:** acceptance `test_stage4_2_qmix_controller_module` (existence + hooks; behavior is covered by the 4.7 fidelity test and 4.8 dry run).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `qmix/observations.py` (legacy v1 features + 5-dim phase one-hot → obs_dim 56; state = N×56+3) and `qmix/qmix_controller.py` (`plan_from_actions` module fn + `QMIXRoundController`: masked selection via trainer, GRU hidden across rounds, per-step recording with mask stored, mask-violation RuntimeError guard, env invariant preserving Collector edges in the drafting retry round). Acceptance PASS.
 
-### 4.3 `[ ]` Masked action selection in the trainer (integration-only change)
+### 4.3 `[x]` Masked action selection in the trainer (integration-only change)
 - **What:** `QMIXTrainer.select_actions` accepts an optional `mask: (n_acting, n_actions)` bool tensor — masked entries set to `-inf` before argmax and excluded from the ε-random draw. Store masks in `EpisodeStep` so the (future, reworked) training step can apply them to target-max computations too. No other trainer changes.
 - **Test:** acceptance `test_stage4_3_masked_select_actions` (PEND→PASS; verifies the mask binds at BOTH ε=0 and ε=1); guard `test_trainer_select_actions_shape` stays green (unmasked call unchanged).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `select_actions(..., mask=None)`: −inf on masked Q before argmax, ε-draw restricted to valid set, fully-masked row falls back defensively. `EpisodeStep` gained `mask` field (stored, not yet consumed by train_step — for the training rework). Acceptance PASS.
 
-### 4.4 `[ ]` Reward event hook *(absorbs report 0.8; evaluator internals untouched)*
+### 4.4 `[x]` Reward event hook *(absorbs report 0.8; evaluator internals untouched)*
 - **What:** In `QMIXRoundController.on_round_end`: detect a **successful** append via `len(ReportState.additions)` delta (not via the chosen action) → update `Score` (`await report_score()`) and `LengthGoal` (`length_score(...)`), compute the delta reward (`compute_reward`), spread it evenly over the steps buffered since the last reward event (port of the old `step_buffer` logic from git, now event-correct); leftover steps flush with reward 0 at `on_run_end`. `NoCorpusCoverageError` → episode ends, buffered steps flush at reward 0 (simple v1; revisit with the reward rework).
 - **Test:** guards pinning the contract this hook builds on: `test_collector_append_and_skip` (additions grow only on real prose — the exact signal the hook watches), `test_score_delta_semantics`, `test_absence_and_sentinel_pins`, and `length_score` sanity inside `test_node_import_and_eval_standalone`. Hook behavior itself: 4.8 dry run.
-- **Done note:** —
+- **Done note:** 2026-07-02 — in `QMIXRoundController.on_round_end`: trigger = `len(ReportState.additions)` growth (never the action); scorer injected as `score_fn` (package does not import experiments/); length gaussian re-stated env-side from config params; reward via `trainer.compute_reward`, spread evenly over buffered steps; `on_run_end` idempotent 0-flush + done flag (also covers `NoCorpusCoverageError` aborts via the runner's finally). Verified by the 4.8 dry run (2 reward events on 2 real appends).
 
-### 4.5 `[ ]` Prompt merge *(report Tier 3)*
+### 4.5 `[x]` Prompt merge *(report Tier 3)*
 - **What:** `HandcraftedPromptSet.get_context_block` additionally renders the QMIX action line when `kwargs.get("action")` is not `None` (reuse `_QMIX_ACTION_DESCRIPTIONS` from `redacting_prompt_set.py`, updated for the v2 action list). Handcrafted runs pass no action → byte-identical prompts (verify in checkpoint 4.8).
 - **Test:** acceptance `test_stage4_5_prompt_action_render` (PEND→PASS; action rendered, phase context preserved, no action line without an action); guard `test_context_block_action_rendering` stays green (redacting-set vocabulary + handcrafted no-action path).
-- **Done note:** —
+- **Done note:** 2026-07-02 — `HandcraftedPromptSet.get_context_block` renders `**QMIX selected action:** <desc>` when an action kwarg arrives (no action → byte-identical block, guard-verified). `_QMIX_ACTION_DESCRIPTIONS` updated for v2 (no_op noted as never-rendering, terminate entry dropped). Acceptance PASS.
 
-### 4.6 `[ ]` Runners: `run_qmix_train` + `run_qmix` *(report 1.1; absorbs 0.1, 0.6)*
+### 4.6 `[x]` Runners: `run_qmix_train` + `run_qmix` *(report 1.1; absorbs 0.1, 0.6)*
 - **What:** New `qmix/runner.py` mirroring `handcrafted_graph/runner.py`, plus thin CLIs `experiments/run_qmix_train.py` (new file) and `experiments/run_qmix.py`:
   - **Shared per-run plumbing** (reuse/extend the handcrafted `_reset_singletons`, adding `SourceBuffer` — it already has it — and the Researcher's `_reported_chunk_ids` via fresh graph construction): trace saved in `finally`, roster read from `agent_configs` (correct key), config-first defaults (Stage 1.2).
   - **Train mode:** per episode — fresh graph + `QMIXRoundController(train=True)`, `phases=[PLANNING, RESEARCH, DRAFTING]`, `max_validation_attempts=0`, `finalize=False`; after `arun`: push recorded episode, `train_step()`, ε decay, checkpoint save; per-episode stats print (score, reward, tokens, ETA — port the old console format).
   - **Inference mode:** greedy controller, full phase list, `finalize=True`, then the full artifact path: `filter_meta_commentary` → `save_raw_report` → optional LaTeX/PDF (same flags as `run_handcrafted`: `--task`, `--llm`, `--trace`, `--no-pdf`, plus `--model-path`).
 - **Test:** acceptance `test_stage4_6_runner_module` (PEND→PASS); guard `test_filter_meta_commentary` pins the inference filter. End-to-end behavior: 4.8 dry run.
-- **Done note:** —
+- **Done note:** 2026-07-02 — `qmix/runner.py` (`run_qmix` inference: greedy, full phases, finalize on, filter→save→PDF artifact path; `run_qmix_train`: D6 shape, per-episode singleton reset incl. SourceBuffer + ExecutionTrace, `on_run_end` in finally, buffer push + train_step + ε decay + checkpointing; `build_trainer` reads `qmix.*` config with explicit float/int casts — YAML parses `5e-4` as a string). Tasks + scorer are INJECTED by the CLIs (`experiments/run_qmix_train.py` recreated, `experiments/run_qmix.py` new) so the package never imports repo-root `datasets`/`experiments`. QMIX traces go to `qmix_trace.json` (own file — `paths.trace_file` would otherwise force the handcrafted name). Both CLIs import clean.
 
-### 4.7 `[ ]` Translation-fidelity test (scripted controller)
+### 4.7 `[x]` Translation-fidelity test (scripted controller)
 - **What:** A test controller that emits, through the *QMIX action vocabulary*, the plans the handcrafted tables would produce for PLANNING/RESEARCH/DRAFTING (e.g. Researcher `selective_query(LA)` in planning round 0…). Run both pipelines on the same task with the same seed/model and compare traces: active sets and edges per round must match. This proves the action→plan translation and the seam are faithful before any training happens.
-- **Done note:** —
+- **Test/Done note:** 2026-07-02 — NEW `tests/test_controller_fidelity.py` (offline, mocked LLM/RAG so both runs are deterministic): the vocabulary controller reproduces all 12 rounds of the handcrafted run with identical active sets and edges. Notably every handcrafted round pattern IS expressible in the 8-action vocabulary (aggregate_refine covers "active receiver", selective/broadcast cover the send patterns). PASS first try.
 
-### 4.8 `[ ]` Regression checkpoint #3 + random-policy dry run
+### 4.8 `[~]` Regression checkpoint #3 + random-policy dry run
 - **What:** (a) Handcrafted default path still matches baseline. (b) `run_qmix_train` with an untrained network and small budgets (2 episodes, tiny model): no crashes, masks respected (assert in controller), episodes land in the buffer with sane shapes, reward events fire only on real appends, trace renders in the visualizer with actions shown.
-- **Done note:** —
+- **Done note:** 2026-07-02 — offline halves done: (a) full battery green (52 passed / 1 designed live-skip across 11 suites; guards 20/20; acceptance 10 PASS / 2 PEND — only the Stage-6 items pend). (b) NEW `tests/test_qmix_dry_run.py`: full random-policy (ε=1.0) episode through the real controller+seam offline — 10 steps recorded with correct shapes incl. masks, mask compliance on every step, 2 reward events on the 2 real appends, replay push + train_step loss computed. **Live half pending:** a user-run `python experiments/run_qmix_train.py --num-episodes 2 --trace` against real Ollama (needs the LLM judges), then check `qmix_trace.json` renders in the visualizer with actions shown.
 
 ---
 
@@ -253,8 +253,8 @@ The handcrafted write round is scripted: when Round A produced a usable blueprin
 | 0 — Guardrails | 1 | 1 |
 | 1 — Legacy removal | 2 | 2 |
 | 2 — Shared refactors | 5 | 5 |
-| 3 — Controller seam | 4 | 3 (3.4 awaiting smoke run) |
-| 4 — QMIX decision layer | 8 | 0 |
+| 3 — Controller seam | 4 | 4 |
+| 4 — QMIX decision layer | 8 | 7 (4.8 awaiting live dry run) |
 | 5 — Observations | 2 | 0 |
 | 6 — Docs & cleanup | 5 | 0 |
-| **Total** | **27** | **11** |
+| **Total** | **27** | **19** |

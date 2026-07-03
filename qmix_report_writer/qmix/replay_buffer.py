@@ -23,6 +23,11 @@ class EpisodeStep:
     global_state: np.ndarray       # (state_dim,)
     done: bool = False
     token_usage: int = 0           # total tokens used this step
+    # Valid-action mask (N-1, n_actions) active when the step was taken.
+    # Stored so the (future, reworked) training step can mask target-max
+    # computations too (upgrade-plan Stage 4.3). Not consumed by the current
+    # train_step.
+    mask: Optional[np.ndarray] = None
 
 
 @dataclass

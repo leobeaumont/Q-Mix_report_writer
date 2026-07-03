@@ -112,11 +112,18 @@ class QMIXTrainer:
         adj_matrix: torch.Tensor,
         hidden_states: torch.Tensor,
         epsilon: float = 0.1,
+        mask: Optional[torch.Tensor] = None,
     ) -> tuple:
         """Epsilon-greedy action selection for all agents.
 
         During training: explore with ε probability.
         During deployment: purely decentralized greedy.
+
+        mask: optional (n_acting, n_actions) bool tensor of valid actions.
+        Masked entries are excluded from BOTH the greedy argmax and the
+        ε-random draw (upgrade-plan Stage 4.3). A fully-masked row falls back
+        to the unmasked distribution (defensive; the mask builder never emits
+        one).
         """
         with torch.no_grad():
             q_values, new_hidden = self.agent_network(
@@ -127,10 +134,23 @@ class QMIXTrainer:
 
         actions = torch.zeros(self.n_acting_agents, dtype=torch.long)
         for i in range(self.n_acting_agents):
+            valid = None
+            if mask is not None:
+                valid = torch.nonzero(mask[i]).flatten()
+                if len(valid) == 0:
+                    valid = None
             if np.random.random() < epsilon:
-                actions[i] = np.random.randint(0, self.n_actions)
+                if valid is not None:
+                    actions[i] = valid[np.random.randint(len(valid))].item()
+                else:
+                    actions[i] = np.random.randint(0, self.n_actions)
             else:
-                actions[i] = q_values[i].argmax().item()
+                if valid is not None:
+                    q = q_values[i].clone()
+                    q[~mask[i].to(q.device)] = float("-inf")
+                    actions[i] = int(q.argmax().item())
+                else:
+                    actions[i] = q_values[i].argmax().item()
 
         return actions, new_hidden.cpu()
 

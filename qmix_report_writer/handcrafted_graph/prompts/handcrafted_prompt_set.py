@@ -366,6 +366,17 @@ class HandcraftedPromptSet(PromptSet):
         if objective:
             block += f"**Your objective this round:** {objective}\n"
 
+        # QMIX-controlled runs: render the action the network selected for this
+        # agent (upgrade-plan Stage 4.5). Handcrafted runs pass no action, so
+        # the block — and therefore every prompt — is byte-identical to before.
+        action = kwargs.get("action")
+        if action is not None:
+            from qmix_report_writer.prompt.redacting_prompt_set import (
+                _QMIX_ACTION_DESCRIPTIONS,
+            )
+            desc = _QMIX_ACTION_DESCRIPTIONS.get(int(action), str(action))
+            block += f"**QMIX selected action:** {desc}\n"
+
         # Inject section context so agents never have to guess or hallucinate IDs.
         if phase == PhaseType.SECTION_REVIEW:
             from qmix_report_writer.utils.globals import ReportState

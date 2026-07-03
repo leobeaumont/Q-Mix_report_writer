@@ -16,14 +16,21 @@ import torch.nn as nn
 
 from .gnn import GNNMessagePassing
 
-# Agent actions controlling communication and execution strategy
+# Agent actions controlling communication and execution strategy (v2 —
+# upgrade-plan Stage 4.1). Changes from v1:
+#   - solo_process became a true no_op: the agent is SKIPPED this round (no
+#     LLM call, no retrieval) instead of executing without communicating
+#     (report 2.3). "Think privately" (the old solo) can be re-added later if
+#     an ablation wants it.
+#   - terminate was dropped (decision D5): episodes end when the phase
+#     pipeline completes, the handcrafted way.
+# Per-phase/per-role validity of these actions is defined in action_masks.py.
 ACTION_NAMES = [
-    "solo_process",                              # 0: Process independently, no communication
-    "broadcast_all",                             # 1: Broadcast observation to all neighbors
-    *[f"selective_query{i}" for i in range(4)],  # 2 -> 5: Query a neighbor
-    "aggregate_refine",                          # 6: Aggregate neighbor responses and refine own answer
-    "append",                                    # 7: Send output to the collector node
-    "terminate",                                 # 8: Same as solo process and vote to end report generation.
+    "no_op",                                     # 0: Skip execution this round entirely
+    "broadcast_all",                             # 1: Send output to all other active acting agents
+    *[f"selective_query{i}" for i in range(4)],  # 2 -> 5: Send output to acting agent i
+    "aggregate_refine",                          # 6: Receive from all other active acting agents
+    "append",                                    # 7: Send output to the Collector (report append)
 ]
 NUM_ACTIONS = len(ACTION_NAMES)
 

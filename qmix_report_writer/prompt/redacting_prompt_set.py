@@ -4,16 +4,17 @@ from .prompt_set_registry import PromptSetRegistry
 
 # Human-readable descriptions of every QMIX action value, shown to agents in
 # their user prompt so they understand why they are being called this round.
+# Matches action space v2 (qmix/agent_network.py): no_op agents are skipped
+# entirely (never see a prompt), terminate no longer exists.
 _QMIX_ACTION_DESCRIPTIONS = {
-    0: "solo_process — work independently this round, no team communication",
+    0: "no_op — you were skipped this round (this line should never render)",
     1: "broadcast_all — share your output with the entire team",
     2: "selective_query — direct your message to a specific teammate",
     3: "selective_query — direct your message to a specific teammate",
     4: "selective_query — direct your message to a specific teammate",
     5: "selective_query — direct your message to a specific teammate",
-    6: "aggregate_refine — you are receiving input from all agents; synthesize it into a refined output",
+    6: "aggregate_refine — you are receiving input from teammates; synthesize it into a refined output",
     7: "append — produce content ready to be written into the report",
-    8: "terminate — signal that the report is complete",
 }
 
 roles = itertools.cycle([
