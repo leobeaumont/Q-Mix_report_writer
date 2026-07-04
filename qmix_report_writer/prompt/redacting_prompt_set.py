@@ -140,7 +140,7 @@ You may be given the subject the document was commissioned to cover (inside <sub
 * redundancy_avoidance (0-5): 5 = Every section adds new value; 0 = Significant repetitive padding.
 
 ### Instructions
-Write your global_reasoning notes FIRST — they drive the scores — then assign the scores. Output your final evaluation in the requested JSON format. Ensure you respect the descriptions provided in the JSON Schema.
+Write your global_reasoning notes FIRST — they drive the scores — then assign the scores. global_reasoning must be ONE short paragraph as a single JSON string (2-3 sentences maximum): never a list, never markdown. Output your final evaluation in the requested JSON format. Ensure you respect the descriptions provided in the JSON Schema.
 """,
 
 
@@ -169,7 +169,7 @@ Audit this specific chunk for technical truth, logic, and verifiability. Use the
 ### Instructions:
 * Read the "Audit History" carefully. If this chunk repeats information from a previous chunk without adding value, penalize it in your reasoning.
 * Identify any "Scientific Red Flags" (e.g., lack of controls, mismatched units).
-* Write your local_audit_notes FIRST — they drive the scores — then assign the scores and the hallucination_flag.
+* Write your local_audit_notes FIRST — they drive the scores — then assign the scores and the hallucination_flag. local_audit_notes must be ONE short paragraph as a single JSON string (2-3 sentences maximum): never a list, never markdown.
 * Output your response as a JSON object matching the provided schema.
 """,
 

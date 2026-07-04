@@ -63,8 +63,8 @@ reward:
   judge:
     model:            # null -> llm.default_model; set to pin a dedicated judge model
     temperature: 0.0  # judges must be deterministic — the reward is not a sample
-    max_tokens: 2048
-    retries: 1        # re-ask once on unparseable JSON, then the event is skipped
+    max_tokens: 3072  # headroom: replies truncated mid-notes are unusable (reason-first)
+    retries: 2        # re-asks on unusable replies (resampled at temp>=0.35), then the event is skipped
 
 rag:
   # Reranking mode applied after RRF fusion.

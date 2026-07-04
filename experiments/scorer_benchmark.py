@@ -201,13 +201,26 @@ async def legacy_scorer_adapter(task, chunks) -> dict:
     if task is not None and "task" in inspect.signature(report_score).parameters:
         kwargs["task"] = task
 
-    chunk_scores, composite = [], 0.0
+    chunk_scores, composite, failures = [], 0.0, 0
     for i, chunk in enumerate(chunks):
         ReportState.instance().append(chunk, f"Summary placeholder, chunk {i + 1}")
-        composite = await report_score(**kwargs)
-        chunk_scores.append(Score.instance().micro_scores[-1])
+        try:
+            composite = await report_score(**kwargs)
+            chunk_scores.append(Score.instance().micro_scores[-1])
+        except Exception as exc:
+            # Mirror the training controller (plan 1.3): a failed judge skips
+            # this chunk's measurement instead of killing an hours-long run.
+            failures += 1
+            chunk_scores.append(None)
+            print(f"  [judge failure on chunk {i + 1}/{len(chunks)}: {exc}]")
+    if chunks and failures == len(chunks):
+        raise RuntimeError(
+            f"all {failures} chunks failed to score — judge/endpoint is down; "
+            f"aborting instead of reporting a fake score"
+        )
     _reset_scoring_state()
-    return {"final_score": float(composite), "chunk_scores": chunk_scores}
+    return {"final_score": float(composite), "chunk_scores": chunk_scores,
+            "judge_failures": failures}
 
 
 def get_adapter(name: str):
@@ -226,7 +239,8 @@ def get_adapter(name: str):
 
 async def run_ranking(adapter, docs_dir: str = DOCS_DIR) -> dict:
     families = discover_families(docs_dir)
-    results = {"mode": "rank", "families": {}, "pairs": [], "chunk_scores": {}}
+    results = {"mode": "rank", "families": {}, "pairs": [], "chunk_scores": {},
+               "judge_failures": {}}
     for family, stems in families.items():
         scores = {}
         for stem in stems:
@@ -236,7 +250,10 @@ async def run_ranking(adapter, docs_dir: str = DOCS_DIR) -> dict:
             # Per-chunk detail: zero-scored chunks are the parse-failure
             # signature (defect A0.3) — keep them inspectable.
             results["chunk_scores"][stem] = outcome.get("chunk_scores", [])
-            print(f"  {stem}: {outcome['final_score']:.4f} ({len(chunks)} chunks)")
+            results["judge_failures"][stem] = outcome.get("judge_failures", 0)
+            fail_note = (f", {outcome['judge_failures']} judge failure(s)"
+                         if outcome.get("judge_failures") else "")
+            print(f"  {stem}: {outcome['final_score']:.4f} ({len(chunks)} chunks{fail_note})")
         results["families"][family] = scores
         for i in range(len(stems)):
             for j in range(i + 1, len(stems)):

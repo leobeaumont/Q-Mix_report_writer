@@ -134,6 +134,44 @@ def test_stage0_2_benchmark_harness():
         corrupted = _attr_or_pending(bench, fn_name)(doc)
         assert isinstance(corrupted, str) and corrupted != doc, f"{fn_name} must alter the document"
 
+    # Adapter resilience: a judge failure skips the chunk's measurement
+    # instead of killing an hours-long run; all-failed aborts loudly.
+    import experiments.eval as eval_mod
+    from qmix_report_writer.utils.globals import Score as _Score
+
+    calls = {"n": 0}
+
+    async def _flaky_score(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise eval_mod.JudgeError("boom")
+        _Score.instance().micro_scores.append(0.5)
+        return 0.6
+
+    async def _dead_score(**kwargs):
+        raise eval_mod.JudgeError("down")
+
+    original = eval_mod.report_score
+    try:
+        eval_mod.report_score = _flaky_score
+        try:
+            out = asyncio.run(bench.legacy_scorer_adapter(None, ["a", "b", "c"]))
+        except eval_mod.JudgeError:
+            raise Pending("benchmark adapter does not survive judge failures yet")
+        assert out.get("judge_failures") == 1
+        assert out["chunk_scores"][1] is None and out["chunk_scores"][0] == 0.5
+        assert abs(out["final_score"] - 0.6) < 1e-9
+
+        eval_mod.report_score = _dead_score
+        try:
+            asyncio.run(bench.legacy_scorer_adapter(None, ["a", "b"]))
+            raise AssertionError("all-failed run must abort, not report a fake score")
+        except RuntimeError:
+            pass
+    finally:
+        eval_mod.report_score = original
+        _reset_state()
+
 
 # ---------------------------------------------------------------------------
 # Stage 1.1 — reason-first schemas, aligned keys, task in the macro prompt
@@ -296,6 +334,64 @@ def test_stage1_3_parse_failure_skips():
 
     asyncio.run(_drive())
     _reset_state()
+
+    # --- Type conformance at the judge-call level (Ollama does not reliably
+    # enforce the response schema: a live run returned notes as a JSON array
+    # and crashed the audit-history prompt) ---------------------------------
+    try:
+        judges_mod = importlib.import_module("qmix_report_writer.evaluation.judges")
+        judge_call = getattr(judges_mod, "_judge_call", None)
+        judge_error = getattr(judges_mod, "JudgeError", None)
+    except ImportError:
+        judge_call = judge_error = None
+    if judge_call is None:
+        import experiments.eval as eval_mod
+        judge_call = getattr(eval_mod, "_judge_call", None)
+        judge_error = getattr(eval_mod, "JudgeError", None)
+    if judge_call is None:
+        raise Pending("no _judge_call helper with type conformance yet")
+
+    _, micro_schema = _current_scoring_schemas()
+    required = ("logical_soundness", "verifiability_score",
+                "technical_precision", "info_density", "hallucination_flag")
+
+    # Coercible reply: list notes, string int, out-of-range int, string bool —
+    # must be conformed on the FIRST call (no retry burned).
+    messy = json.dumps({
+        "local_audit_notes": ["note a", "note b"],
+        "logical_soundness": "4",
+        "verifiability_score": 7,
+        "technical_precision": 3,
+        "info_density": 3,
+        "hallucination_flag": "false",
+    })
+    stub = _CaptureLLM(responses=[messy])
+    result = asyncio.run(judge_call(stub, [], micro_schema, required))
+    assert len(stub.calls) == 1, "coercible reply should not burn a retry"
+    assert result["local_audit_notes"] == "note a note b"
+    assert result["logical_soundness"] == 4
+    assert result["verifiability_score"] == 5, "score must be clamped to the schema max"
+    assert result["hallucination_flag"] is False
+
+    # Unusable replies: retry (resampled!), then raise — never score a
+    # malformed reply. At temperature 0 an identical re-ask would just
+    # reproduce the same bad reply, so retries must use a nonzero floor.
+    cfg_retries = int((get_config().get("reward", {}).get("judge", {}) or {})
+                      .get("retries", 1))
+    stub = _CaptureLLM(responses=["not json {{{"] * (cfg_retries + 1))
+    try:
+        asyncio.run(judge_call(stub, [], micro_schema, required))
+        raise AssertionError("garbage judge replies must raise, not score")
+    except AssertionError:
+        raise
+    except Exception as exc:
+        assert judge_error is not None and isinstance(exc, judge_error), \
+            f"expected JudgeError, got {type(exc).__name__}: {exc}"
+    assert len(stub.calls) == cfg_retries + 1, \
+        f"expected {cfg_retries + 1} attempts, saw {len(stub.calls)}"
+    assert stub.calls[0]["temperature"] == 0.0
+    if not all(c["temperature"] >= 0.3 for c in stub.calls[1:]):
+        raise Pending("retries are not resampled (still temperature 0)")
 
 
 # ---------------------------------------------------------------------------

@@ -33,24 +33,75 @@ def _judge_llm():
     return get_llm(_judge_cfg().get("model") or None)
 
 
+def _conform_to_schema(parsed, schema):
+    """Coerce a judge reply's values to the schema's declared types.
+
+    Ollama does not reliably enforce the response schema (a live run returned
+    the notes field as a JSON array), so conformance is done client-side:
+    lists→joined strings, numeric strings→ints, ints clamped to the schema's
+    min/max. Returns None when a value cannot be conformed — the caller then
+    retries (never scores a malformed reply).
+    """
+    if not isinstance(parsed, dict):
+        return None
+    props = schema.get("properties", {})
+    out = {}
+    for key, val in parsed.items():
+        spec = props.get(key, {})
+        expected = spec.get("type")
+        if expected == "string":
+            if isinstance(val, list):
+                val = " ".join(str(item) for item in val)
+            elif not isinstance(val, str):
+                val = str(val)
+        elif expected == "integer":
+            if isinstance(val, bool):
+                return None
+            if not isinstance(val, int):
+                try:
+                    val = int(round(float(val)))
+                except (TypeError, ValueError):
+                    return None
+            lo, hi = spec.get("minimum"), spec.get("maximum")
+            if lo is not None:
+                val = max(lo, val)
+            if hi is not None:
+                val = min(hi, val)
+        elif expected == "boolean":
+            if not isinstance(val, bool):
+                if isinstance(val, str) and val.strip().lower() in ("true", "false"):
+                    val = val.strip().lower() == "true"
+                else:
+                    return None
+        out[key] = val
+    return out
+
+
 async def _judge_call(llm, messages, schema, required_keys):
-    """One judge call: temperature 0, capped tokens, retry-then-raise parsing."""
+    """One judge call: temperature 0, capped tokens, retry-then-raise parsing.
+
+    A reply is usable when it parses, every value conforms to the schema's
+    types (coerced where safe), and all required keys are present.
+    """
     cfg = _judge_cfg()
     temperature = float(cfg.get("temperature", 0.0))
     max_tokens = int(cfg.get("max_tokens", 2048))
     retries = int(cfg.get("retries", 1))
 
     last = ""
-    for _ in range(retries + 1):
+    for attempt in range(retries + 1):
+        # Retries must RESAMPLE: at temperature 0 an identical re-ask would
+        # deterministically reproduce the same malformed reply (seen live).
+        attempt_temperature = temperature if attempt == 0 else max(temperature, 0.35)
         last = await llm.agen(
             messages,
             max_tokens=max_tokens,
-            temperature=temperature,
+            temperature=attempt_temperature,
             response_schema=schema,
         )
-        parsed = safe_json_parse(last)
-        if isinstance(parsed, dict) and all(k in parsed for k in required_keys):
-            return parsed
+        conformed = _conform_to_schema(safe_json_parse(last), schema)
+        if conformed is not None and all(k in conformed for k in required_keys):
+            return conformed
     raise JudgeError(
         f"unusable judge reply after {retries + 1} attempt(s): {str(last)[:120]}..."
     )
@@ -111,7 +162,9 @@ async def report_score(task: Optional[str] = None) -> float:
     # Only take the last 3 notes to keep the prompt size stable
     history_window = score_memory.micro_notes[-3:]
     for i, notes in enumerate(history_window):
-        user_prompt += f"<chunk {i} notes>\n" + notes + f"\n</chunk {i} notes>\n"
+        # str() belt-and-braces: _conform_to_schema guarantees strings for new
+        # entries, but the history must never be able to crash the prompt.
+        user_prompt += f"<chunk {i} notes>\n" + str(notes) + f"\n</chunk {i} notes>\n"
     user_prompt += "</audit history>\n"
 
     current_chunk = ReportState.instance().additions[-1] if ReportState.instance().additions else ReportState.instance().content
