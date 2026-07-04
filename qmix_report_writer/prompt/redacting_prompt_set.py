@@ -118,13 +118,13 @@ You have to write a new summary that describes the progress of the report.
 
     "Macro Scoring": """
 ### Role
-You are a Senior Scientific Editor and Content Architect. Your goal is to evaluate the structural integrity and high-level quality of a document intended for AI training data.
+You are a Senior Scientific Editor and Content Architect. Your goal is to evaluate the structural integrity and high-level quality of a technical document.
 
 ### Task
-Analyze the document as a whole. Focus on the narrative arc, tone consistency, and overall utility for a learner or researcher.
+You may be given the subject the document was commissioned to cover (inside <subject> tags). Analyze the document as a whole: fit to the commissioned subject, narrative arc, tone consistency, and overall utility for a learner or researcher.
 
 ### Strictness Clause
-* **Demanding:** Do not award a 5 unless the document exceeds professional scientific standards. A score of 3 represents "minimum viable quality." 
+* **Demanding:** Do not award a 5 unless the document exceeds professional scientific standards. A score of 3 represents "minimum viable quality."
 * **Negative Bias:** Look specifically for reasons to deduct points (e.g., hidden circular logic, generic "AI-style" filler, or lack of unique insight).
 
 ### Scoring Anchors:
@@ -133,14 +133,14 @@ Analyze the document as a whole. Focus on the narrative arc, tone consistency, a
 * **1 (Poor):** Significant logical gaps or heavy repetitive padding.
 
 ### Scoring Rubric
-* Subject Coverage (0-5): 5 = The subject is covered in depth; 0 = Off-topic or misinterpretation of subject.
-* Narrative Flow (0-5): 5 = Seamless transitions between concepts; 0 = Subjects jumps or disconnected sections.
-* Structural Integrity (0-5): 5 = Follows standard scientific/pedagogical hierarchy; 0 = Chaotic or illogical organization.
-* Tone Consistency (0-5): 5 = Stable "voice" throughout; 0 = Shifts randomly between academic, casual, or marketing speak.
-* Global Redundancy (0-5): 5 = Every section adds new value; 0 = Significant repetitive padding.
+* subject_coverage (0-5): 5 = The commissioned subject is covered in depth; 0 = Off-topic or misinterpretation of the subject.
+* global_flow (0-5): 5 = Seamless transitions between concepts; 0 = Subject jumps or disconnected sections.
+* structural_score (0-5): 5 = Follows standard scientific/pedagogical hierarchy; 0 = Chaotic or illogical organization.
+* tone_consistency (0-5): 5 = Stable "voice" throughout; 0 = Shifts randomly between academic, casual, or marketing speak.
+* redundancy_avoidance (0-5): 5 = Every section adds new value; 0 = Significant repetitive padding.
 
 ### Instructions
-Output your final evaluation in the requested JSON format. Ensure you respect the descriptions provided in the JSON Schema.
+Write your global_reasoning notes FIRST — they drive the scores — then assign the scores. Output your final evaluation in the requested JSON format. Ensure you respect the descriptions provided in the JSON Schema.
 """,
 
 
@@ -161,15 +161,15 @@ Audit this specific chunk for technical truth, logic, and verifiability. Use the
 * **1 (Poor):** Significant logical gaps or heavy repetitive padding.
 
 ### Scoring Rubric (Ground Truth):
-* Local Logic (0-5): 5 = Premises lead perfectly to conclusions; 0 = Logic is broken or "hallucinated."
-* Verifiability (0-5): 5 = Claims are cited or based on fundamental laws; 0 = Claims are "homeless" or fake.
-* Technical Precision (0-5): 5 = Exact terminology and units; 0 = Vague, incorrect, or misleading scientific terms.
-* Information Density (0-5): 5 = Straight to the point content; 0 = Fluff-heavy or content-free.
+* logical_soundness (0-5): 5 = Premises lead perfectly to conclusions; 0 = Logic is broken or "hallucinated."
+* verifiability_score (0-5): 5 = Claims are cited or based on fundamental laws; 0 = Claims are "homeless" or fake.
+* technical_precision (0-5): 5 = Exact terminology and units; 0 = Vague, incorrect, or misleading scientific terms.
+* info_density (0-5): 5 = Straight to the point content; 0 = Fluff-heavy or content-free.
 
 ### Instructions:
 * Read the "Audit History" carefully. If this chunk repeats information from a previous chunk without adding value, penalize it in your reasoning.
 * Identify any "Scientific Red Flags" (e.g., lack of controls, mismatched units).
-* You must perform your reasoning before assigning scores.
+* Write your local_audit_notes FIRST — they drive the scores — then assign the scores and the hallucination_flag.
 * Output your response as a JSON object matching the provided schema.
 """,
 
@@ -256,20 +256,23 @@ Output exactly 3 lines. Each line is one search query string. No numbering, no l
 """
 }
 
+# Reason-first field order (training_eval plan 1.1): with strict structured
+# decoding the model emits fields in schema order, so the free-text reasoning
+# MUST precede the scores it is supposed to drive.
 JSON_SCHEMA = {
     "Macro Scoring": {
         "type": "object",
         "properties": {
+            "global_reasoning": {"type": "string", "description": "Very short notes justifying the scores. Written before the scores."},
             "subject_coverage": {"type": "integer", "minimum": 0, "maximum": 5},
             "global_flow": {"type": "integer", "minimum": 0, "maximum": 5},
             "structural_score": {"type": "integer", "minimum": 0, "maximum": 5},
             "tone_consistency": {"type": "integer", "minimum": 0, "maximum": 5},
-            "redundancy_penalty": {"type": "integer", "minimum": 0, "maximum": 5},
-            "global_reasoning": {"type": "string", "description": "Very short notes on the analysis."}
+            "redundancy_avoidance": {"type": "integer", "minimum": 0, "maximum": 5}
         },
         "required": [
-            "subject_coverage", "global_flow", "structural_score", 
-            "tone_consistency", "redundancy_penalty", "global_reasoning"
+            "global_reasoning", "subject_coverage", "global_flow",
+            "structural_score", "tone_consistency", "redundancy_avoidance"
         ],
         "additionalProperties": False
     },
@@ -277,16 +280,16 @@ JSON_SCHEMA = {
     "Micro Scoring": {
         "type": "object",
         "properties": {
+            "local_audit_notes": {"type": "string", "description": "Very short audit notes on this chunk. Written before the scores."},
             "logical_soundness": {"type": "integer", "minimum": 0, "maximum": 5},
             "verifiability_score": {"type": "integer", "minimum": 0, "maximum": 5},
             "technical_precision": {"type": "integer", "minimum": 0, "maximum": 5},
             "info_density": {"type": "integer", "minimum": 0, "maximum": 5},
-            "hallucination_flag": {"type": "boolean"},
-            "local_audit_notes": {"type": "string", "description": "Very short notes of observations on this chunk."}
+            "hallucination_flag": {"type": "boolean"}
         },
         "required": [
-            "logical_soundness", "verifiability_score", "technical_precision", 
-            "info_density", "hallucination_flag", "local_audit_notes"
+            "local_audit_notes", "logical_soundness", "verifiability_score",
+            "technical_precision", "info_density", "hallucination_flag"
         ],
         "additionalProperties": False
     },

@@ -75,10 +75,10 @@
 - **Test:** acceptance `test_stage0_2_benchmark_harness` (module + metric functions exist; ranking-accuracy/variance math verified on synthetic score fixtures, offline).
 - **Done note:** 2026-07-03 — `experiments/scorer_benchmark.py`: three CLI modes (`rank` / `repeat --doc X -k 5` / `corrupt --doc X`), adapter-pluggable (`--adapter legacy|v2`; legacy = frozen test_scorer protocol over `experiments.eval`, imported lazily so the module survives Stage 2.6). Family discovery verified: ACCADA v012→final and Towards v01→v22 grouped and ordered correctly. Ranking accuracy counts ties as half-wins over ALL ordered same-family pairs; corruption probes are deterministic. Singletons reset between scored documents (the leak test_scorer.py had). Acceptance PASS.
 
-### 0.3 `[ ]` **LIVE** Baseline benchmark run (current judges)
+### 0.3 `[x]` **LIVE** Baseline benchmark run (current judges)
 - **What:** Run the harness on the current `report_score` over all documents in `tests/test_documents/` (+ repeat-variance on one doc, k≈5). Archive results (e.g. `tests/baseline_refs/<date>-scorer/`). This is the before-picture every Part-A change is compared against.
 - **Test:** protocol item — results recorded here.
-- **Done note:** —
+- **Done note:** 2026-07-04 — user ran `rank` + `repeat` (results: `tests/scoring_results/benchmark_{rank,repeat}_legacy_20260704_*`). **Baseline: ranking accuracy 0.35** (20 pairs — BELOW coin-flip; ACCADA_final, the best version, scores 0.013 vs ~0.14 for its drafts; Towards v22 0.139 < v01 0.154), **repeat σ = 0.0127** on a ~0.145 signal (~9 % relative noise). Bimodal doc scores (~0.14 vs ~0.02) are the A0.3 signature: parse failures recording zeros into the running micro average. Forensics: the May-2026 runs that scored 0.69–0.86 used qwen3:8b and pre-"Strictness Clause" prompts (clause added 2026-05-11, judge model → Qwen3-30B mid-June), so the collapse is a real property of TODAY's scorer, not a harness artifact. Runtime (~hours) confirmed expected: macro judge re-reads the whole growing report per chunk (O(n²) tokens — killed by TD1). Harness amended to store per-chunk scores in rank results for future diagnosis.
 
 ---
 
@@ -86,20 +86,20 @@
 
 > These fixes transfer into the Stage-2 module (prompts/schemas move, discipline stays). Doing them first separates "noise reduction" from "redesign" in the benchmark attribution.
 
-### 1.1 `[ ]` Reason-first schemas + prompt/schema alignment *(report A0.1 partial, A0.5)*
+### 1.1 `[x]` Reason-first schemas + prompt/schema alignment *(report A0.1 partial, A0.5)*
 - **What:** In the scoring prompts/schemas: reasoning field FIRST in both schemas; rubric names aligned with schema keys; `redundancy_penalty` renamed (e.g. `redundancy_avoidance`); "AI training data" framing removed; the **task added to the macro judge's user prompt** (from `ReportState.instance().task` is wrong — pass the episode task explicitly) and `subject_coverage` scored against it.
 - **Test:** acceptance `test_stage1_1_schema_reason_first` (reasoning key first in `properties` order; no `redundancy_penalty` key; macro user prompt contains a task block when task passed).
-- **Done note:** —
+- **Done note:** 2026-07-04 — both schemas reordered reasoning-first with reason-first noted in the prompts' Instructions; rubric bullets now use the literal schema keys; `redundancy_avoidance` renamed; "AI training data" framing dropped; `report_score(task=None)` renders an optional `<subject>` block before the report. Strictness Clause deliberately kept as-is (Stage 1 = de-noising, not re-calibration — attribution stays clean for the 1.4 re-run). Acceptance PASS.
 
-### 1.2 `[ ]` Judge call discipline *(report A0.4, A1.4)*
+### 1.2 `[x]` Judge call discipline *(report A0.4, A1.4)*
 - **What:** All judge calls pass `temperature=0` explicitly (via `agen(..., temperature=0.0)`); new config `reward.judge.model` (default = `llm.default_model`) + `reward.judge.max_tokens` read by the scorer; judge LLM resolved once, independent of the actors' `--llm` flag (now explicit and documented).
 - **Test:** acceptance `test_stage1_2_judge_discipline` (capture-stub LLM: temperature 0 received; judge model taken from `reward.judge.model` when set).
-- **Done note:** —
+- **Done note:** 2026-07-04 — `reward.judge.{model, temperature, max_tokens, retries}` added to config; `experiments/eval.py` gained `_judge_cfg`/`_judge_llm`/`_judge_call` — every judge call passes temperature (default 0.0) and max_tokens (2048) explicitly. Acceptance PASS.
 
-### 1.3 `[ ]` Parse-failure policy *(report A0.3)*
+### 1.3 `[x]` Parse-failure policy *(report A0.3)*
 - **What:** On judge JSON parse failure: retry once; on second failure the scoring call reports **failure** (exception or `None`) instead of zeros — the controller then *skips the reward event* (steps stay buffered for the next event; warning logged + counted). No score of 0 is ever recorded from a transport/parse problem.
 - **Test:** acceptance `test_stage1_3_parse_failure_skips` (stub judge returning garbage twice → no event, buffer intact; garbage once then valid → event fires).
-- **Done note:** —
+- **Done note:** 2026-07-04 — `_judge_call` validates all required schema keys per reply, retries (`reward.judge.retries`, default 1), then raises `JudgeError`; `QMIXRoundController._reward_event` wraps the scorer call — any judge exception increments `self.judge_failures`, logs, and returns with the buffer intact (Score/LengthGoal untouched). The benchmark adapter also forwards `task` when given (corpus PDFs keep `None` — a family stem is not a subject). Acceptance PASS; controller dry-run + full battery green.
 
 ### 1.4 `[ ]` **LIVE** Benchmark re-run #1
 - **What:** Re-run 0.3's protocol on the de-noised judges. Expectation: repeat-variance collapses (temp 0), ranking accuracy ≥ baseline. Record deltas here.
@@ -249,8 +249,8 @@ None — TD1–TD4 and OD-A–D are all settled (see decision log). New decision
 
 | Stage | Items | Done |
 |-------|-------|------|
-| 0 — Guardrails & baseline | 3 | 2 |
-| 1 — Judge de-noising | 4 | 0 |
+| 0 — Guardrails & baseline | 3 | 3 |
+| 1 — Judge de-noising | 4 | 3 |
 | 2 — Evaluation module & reward v2 | 8 | 0 |
 | 3 — Trainer correctness | 7 | 0 |
 | 4 — Loop engineering | 5 | 0 |

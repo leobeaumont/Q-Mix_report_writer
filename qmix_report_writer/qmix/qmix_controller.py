@@ -139,6 +139,7 @@ class QMIXRoundController(RoundController):
 
         self.hidden: Optional[torch.Tensor] = None
         self.episode = Episode()
+        self.judge_failures = 0
         self._step_buffer: List[EpisodeStep] = []
         self._pending: Optional[EpisodeStep] = None
         self._pending_tokens_before = 0.0
@@ -251,7 +252,20 @@ class QMIXRoundController(RoundController):
             # Recording without scoring (offline dry runs): steps stay in the
             # buffer and flush at reward 0 on run end.
             return
-        Score.instance().update(await self.score_fn())
+        # Judge failures skip the event instead of scoring 0 (plan 1.3): the
+        # buffered steps stay for the next event; a parse/transport hiccup
+        # must never enter the score history (defect A0.3).
+        try:
+            new_score = await self.score_fn()
+        except Exception as exc:
+            self.judge_failures += 1
+            logger.warning(
+                f"Judge failure #{self.judge_failures} — reward event skipped, "
+                f"{len(self._step_buffer)} buffered step(s) kept for the next "
+                f"event. ({exc})"
+            )
+            return
+        Score.instance().update(new_score)
         LengthGoal.instance().update(self._length_score())
         reward = self.trainer.compute_reward(
             Score.instance().get_delta(), LengthGoal.instance().get_delta()

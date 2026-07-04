@@ -58,6 +58,13 @@ reward:
   length_weight: 0.1
   length_goal: 25000  # 25000 char -> ~4500 words -> ~1 scientific document
   length_sigma: 8500  # sigma of the gaussian curve: 8500 -> reward start at ~5000 char
+  # LLM-judge settings (training_eval plan 1.2) — the judges are deliberately
+  # independent of the actors' --llm flag.
+  judge:
+    model:            # null -> llm.default_model; set to pin a dedicated judge model
+    temperature: 0.0  # judges must be deterministic — the reward is not a sample
+    max_tokens: 2048
+    retries: 1        # re-ask once on unparseable JSON, then the event is skipped
 
 rag:
   # Reranking mode applied after RRF fusion.

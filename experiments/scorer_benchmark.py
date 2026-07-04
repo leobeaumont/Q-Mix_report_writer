@@ -178,26 +178,33 @@ def _reset_scoring_state():
         pass
 
 
-async def legacy_scorer_adapter(task: str, chunks) -> dict:
+async def legacy_scorer_adapter(task, chunks) -> dict:
     """Incremental scoring through the CURRENT judges (experiments.eval).
 
     Frozen protocol from tests/test_scorer.py: append each chunk with a
     placeholder summary, score after every append, final composite = last
-    report_score value. `task` is accepted for interface parity but the
-    legacy judges never see it (defect A0.1 — the point of the baseline).
+    report_score value. `task` is forwarded to the judges when given; the
+    benchmark passes None for the corpus PDFs (their commissioned subject is
+    unknown — a family stem is not a subject).
     """
     # Local import: this module must stay importable after Stage 2.6 deletes
     # experiments/eval.py (the adapter itself then becomes unusable, which is
     # fine — the v2 adapter takes over).
+    import inspect
+
     from experiments.eval import report_score
 
     _reset_scoring_state()
     from qmix_report_writer.utils.globals import ReportState, Score
 
+    kwargs = {}
+    if task is not None and "task" in inspect.signature(report_score).parameters:
+        kwargs["task"] = task
+
     chunk_scores, composite = [], 0.0
     for i, chunk in enumerate(chunks):
         ReportState.instance().append(chunk, f"Summary placeholder, chunk {i + 1}")
-        composite = await report_score()
+        composite = await report_score(**kwargs)
         chunk_scores.append(Score.instance().micro_scores[-1])
     _reset_scoring_state()
     return {"final_score": float(composite), "chunk_scores": chunk_scores}
@@ -219,13 +226,16 @@ def get_adapter(name: str):
 
 async def run_ranking(adapter, docs_dir: str = DOCS_DIR) -> dict:
     families = discover_families(docs_dir)
-    results = {"mode": "rank", "families": {}, "pairs": []}
+    results = {"mode": "rank", "families": {}, "pairs": [], "chunk_scores": {}}
     for family, stems in families.items():
         scores = {}
         for stem in stems:
             chunks = chunk_text(extract_text(os.path.join(docs_dir, stem + ".pdf")))
-            outcome = await adapter(family, chunks)
+            outcome = await adapter(None, chunks)  # corpus PDFs: subject unknown
             scores[stem] = outcome["final_score"]
+            # Per-chunk detail: zero-scored chunks are the parse-failure
+            # signature (defect A0.3) — keep them inspectable.
+            results["chunk_scores"][stem] = outcome.get("chunk_scores", [])
             print(f"  {stem}: {outcome['final_score']:.4f} ({len(chunks)} chunks)")
         results["families"][family] = scores
         for i in range(len(stems)):
@@ -243,7 +253,7 @@ async def run_repeat(adapter, doc_stem: str, k: int, docs_dir: str = DOCS_DIR) -
     chunks = chunk_text(extract_text(os.path.join(docs_dir, doc_stem + ".pdf")))
     scores = []
     for i in range(k):
-        outcome = await adapter(doc_stem, chunks)
+        outcome = await adapter(None, chunks)
         scores.append(outcome["final_score"])
         print(f"  run {i + 1}/{k}: {outcome['final_score']:.4f}")
     return {"mode": "repeat", "doc": doc_stem, "scores": scores,
@@ -252,12 +262,12 @@ async def run_repeat(adapter, doc_stem: str, k: int, docs_dir: str = DOCS_DIR) -
 
 async def run_corruption(adapter, doc_stem: str, docs_dir: str = DOCS_DIR) -> dict:
     text = extract_text(os.path.join(docs_dir, doc_stem + ".pdf"))
-    clean = await adapter(doc_stem, chunk_text(text))
+    clean = await adapter(None, chunk_text(text))
     results = {"mode": "corrupt", "doc": doc_stem,
                "clean_score": clean["final_score"], "probes": {}}
     print(f"  clean: {clean['final_score']:.4f}")
     for name, corrupt in CORRUPTIONS.items():
-        outcome = await adapter(doc_stem, chunk_text(corrupt(text)))
+        outcome = await adapter(None, chunk_text(corrupt(text)))
         drop = clean["final_score"] - outcome["final_score"]
         results["probes"][name] = {"score": outcome["final_score"], "drop": drop}
         print(f"  {name}: {outcome['final_score']:.4f} (drop {drop:+.4f})")
