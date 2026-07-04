@@ -22,3 +22,5 @@ build/
 dist/
 *.egg-info/
 *.xlsx
+benchmark_rank*.md
+benchmark_repeat*.md
