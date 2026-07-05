@@ -149,8 +149,34 @@
 - **Test:** the dry-run suite itself + full battery.
 - **Done note:** 2026-07-05 — dry run uses a stub evaluator (per-chunk `score_chunk` + terminal `score_report`); asserts exactly 2 chunk calls / 1 macro call, reward on exactly the 2 event steps, final step > 0.7 (carries the terminal macro), done flag. NEW `tests/test_evaluation.py` (6 semantic tests). Full offline battery green: new guards 6, new acceptance 10 PASS/12 PEND, evaluation 6, dry-run/fidelity/training-shape/observations, old guards 19, old acceptance 12, review/PBDS suites.
 
-### 2.8 `[ ]` **LIVE** Benchmark re-run #2 (evaluator v2)
+### 2.8 `[x]` **LIVE** Benchmark re-run #2 (evaluator v2)
 - **What:** Run the harness with the v2 adapter (grounded scoring needs source chunks — for benchmark PDFs, source-less mode exercises the audit path; add one RAG-backed run on a generated report for the grounded path). Compare against 0.3/1.4: ranking accuracy must not regress, corruption probes must pass (off-topic ↓ `subject_coverage`, perturbed numbers ↓ grounding). Record here.
+- **Done note:** 2026-07-05 (results: `benchmark_rank_v2_20260705_114224`, `benchmark_corrupt_v2_20260705_114747`). Transport rock-solid: **0 judge failures** across ~123 chunks. `numbers` corruption probe strong and correct (0.524 → 0.370, −0.153) — the audit rubric genuinely penalizes factually-wrong content. **Ranking accuracy 0.40** (below Stage 1's 0.80) and the `off-topic`/`shuffled` probes flat — but this is **not an apples-to-apples regression**: (a) the corpus PDFs carry NO task and NO sources, so `rank`/`corrupt` never exercise grounding (the one thing Stage 2 added) and the judges are subject-blind; (b) Stage 1's 0.80 came from a different protocol (legacy running-average scorer). Per user (2026-07-05): the task/source-absence effects are **benchmark artifacts, not evaluator bugs** — real generated documents always have both. Acceptance bar ("ranking must not regress") is therefore treated as **not applicable to this source-less corpus**; the genuine findings are spun into 2.9–2.10 below. The ONE real evaluator problem surfaced (grounding stayed inert even WITH a source in the smoke test) → **2.9**.
+
+---
+
+## Stage 2 follow-ups — real evaluator findings from the 2.8 live run
+
+> Added 2026-07-05 after the 2.8 results. Scope filter (user): problems caused by the test PDFs lacking a task/sources are NOT evaluator bugs (production documents always carry both) — only genuine evaluator behaviour is tracked here.
+
+### 2.9 `[ ]` **LIVE** Claim extraction under-fires → grounding stays inert *(the real 2.8 finding; TD3 core)*
+- **Problem:** In `judge_smoke.py` the claim check returned **0 claims** (`grounding None`, `claims 0/0/0`) for a chunk with a clearly factual sentence ("free-fall acceleration ≈ 9.81 m/s², independent of mass") **even though a matching source was provided**. When `score_chunk` gets an empty `claims` list, `grounding_ratio=None` and the grounding factor is 1.0 — so the modulation never happens. In *training* every appended section carries Collector sources, so if extraction habitually returns empty, **TD3's grounding mechanism is effectively dead** and chunk scores reduce to the ungrounded audit rubric.
+- **Likely mechanism:** grammar-constrained decoding lets the model emit a valid `{"claims": []}`; the field-completion loop can't help (the `claims` key IS present, just empty); the prompt's "the most load-bearing ones, at most 8" invites conservatism.
+- **Possible fixes (pick at implementation):**
+  - Strengthen `CLAIM_CHECK_PROMPT`: require every quantitative/mechanistic assertion be extracted; explicitly forbid an empty list when the chunk contains numbers, units, or named relationships.
+  - Add a client-side guard: if `claims == []` but the chunk carries factual markers (digits/units/`$…$`), re-ask once with a stronger nudge before accepting empty.
+  - Consider grounding off the audit's `verifiability_score` as a fallback when no claims are extractable (so grounding never silently no-ops), or fold source-grounding into the verifiability rubric directly.
+  - Set a `min_claims` expectation in the schema description; possibly raise the claim-check `num_predict`.
+- **Test:** extend `judge_smoke.py`/a dedicated **LIVE** grounding probe: (a) chunk + matching source → ≥1 `supported`; (b) chunk + a source with the numbers perturbed → ≥1 `contradicted` and a visible score drop. Offline: a `test_evaluation.py` case asserting a non-empty claims reply drives `grounding_ratio` and the factor as expected (already covered structurally; add the "digits present ⇒ re-ask on empty" guard test if that fix is chosen).
+- **Done note:** —
+
+### 2.10 `[ ]` Re-measure discrimination once grounding engages (benchmark fidelity for grounding)
+- **Problem:** Same-revision discrimination was poor in 2.8 (ACCADA all within 0.425–0.447; Towards *descended* v01→v20 with the 3-chunk v01 scoring highest). This is **confounded**: the differences between paper revisions are largely factual/evidential, exactly the axis grounding scores — and grounding was inert (2.9) and source-less here. It cannot be judged a real evaluator defect until grounding actually fires. Also, the benchmark currently cannot test the grounded path at all (no sources in the corpus).
+- **Possible fixes:**
+  - Add a **grounding probe** to `scorer_benchmark.py`: synthesize sources for a document (e.g. take each chunk's own sentences as "supporting" sources, and a numbers-perturbed copy as "contradicting"), so the claim-check + grounding factor are exercised and measurable offline-of-corpus.
+  - Optionally derive a per-PDF `subject` from the title/first chunk so the audit/macro are not subject-blind — improves comparability, though task-absence itself is a benchmark artifact (not tracked as a bug).
+  - Re-run ranking with grounding engaged (post-2.9) and record whether discrimination recovers; only then decide if a real evaluator problem remains.
+- **Test:** the new grounding probe (LIVE) + its offline metric-shape checks in the acceptance suite.
 - **Done note:** —
 
 ---
@@ -256,8 +282,8 @@ None — TD1–TD4 and OD-A–D are all settled (see decision log). New decision
 |-------|-------|------|
 | 0 — Guardrails & baseline | 3 | 3 |
 | 1 — Judge de-noising | 4 | 4 |
-| 2 — Evaluation module & reward v2 | 8 | 7 |
+| 2 — Evaluation module & reward v2 | 10 | 8 |
 | 3 — Trainer correctness | 7 | 0 |
 | 4 — Loop engineering | 5 | 0 |
 | 5 — Docs & sync | 4 | 0 |
-| **Total** | **31** | **14** |
+| **Total** | **33** | **15** |
