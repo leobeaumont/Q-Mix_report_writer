@@ -134,43 +134,42 @@ def test_stage0_2_benchmark_harness():
         corrupted = _attr_or_pending(bench, fn_name)(doc)
         assert isinstance(corrupted, str) and corrupted != doc, f"{fn_name} must alter the document"
 
-    # Adapter resilience: a judge failure skips the chunk's measurement
-    # instead of killing an hours-long run; all-failed aborts loudly.
-    import experiments.eval as eval_mod
-    from qmix_report_writer.utils.globals import Score as _Score
+    # Adapter resilience (re-pointed to the v2 evaluator adapter in 2.6):
+    # a judge failure skips the chunk's measurement instead of killing an
+    # hours-long run; all-failed aborts loudly.
+    adapter = getattr(bench, "evaluator_scorer_adapter", None)
+    if adapter is None:
+        raise Pending("v2 evaluator adapter not present yet")
 
     calls = {"n": 0}
 
-    async def _flaky_score(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise eval_mod.JudgeError("boom")
-        _Score.instance().micro_scores.append(0.5)
-        return 0.6
+    class _FlakyEval:
+        async def score_chunk(self, chunk, sources, task, context=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return None  # judge failure on chunk 2
+            return SimpleNamespace(score=0.5, grounding_ratio=None)
 
-    async def _dead_score(**kwargs):
-        raise eval_mod.JudgeError("down")
+        async def score_report(self, task, outline, report):
+            return SimpleNamespace(score=0.8)
 
-    original = eval_mod.report_score
+    out = asyncio.run(adapter(None, ["a", "b", "c"], evaluator=_FlakyEval()))
+    assert out.get("judge_failures") == 1
+    assert out["chunk_scores"][1] is None and out["chunk_scores"][0] == 0.5
+    assert abs(out["final_score"] - (0.3 * 0.8 + 0.7 * 0.5)) < 1e-9
+
+    class _DeadEval:
+        async def score_chunk(self, chunk, sources, task, context=None):
+            return None
+
+        async def score_report(self, task, outline, report):
+            return None
+
     try:
-        eval_mod.report_score = _flaky_score
-        try:
-            out = asyncio.run(bench.legacy_scorer_adapter(None, ["a", "b", "c"]))
-        except eval_mod.JudgeError:
-            raise Pending("benchmark adapter does not survive judge failures yet")
-        assert out.get("judge_failures") == 1
-        assert out["chunk_scores"][1] is None and out["chunk_scores"][0] == 0.5
-        assert abs(out["final_score"] - 0.6) < 1e-9
-
-        eval_mod.report_score = _dead_score
-        try:
-            asyncio.run(bench.legacy_scorer_adapter(None, ["a", "b"]))
-            raise AssertionError("all-failed run must abort, not report a fake score")
-        except RuntimeError:
-            pass
-    finally:
-        eval_mod.report_score = original
-        _reset_state()
+        asyncio.run(adapter(None, ["a", "b"], evaluator=_DeadEval()))
+        raise AssertionError("all-failed run must abort, not report a fake score")
+    except RuntimeError:
+        pass
 
 
 # ---------------------------------------------------------------------------

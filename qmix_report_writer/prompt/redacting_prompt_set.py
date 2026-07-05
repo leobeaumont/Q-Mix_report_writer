@@ -116,64 +116,6 @@ You have to write a new summary that describes the progress of the report.
 3) Only answer the new summary and nothing else.""",
 
 
-    "Macro Scoring": """
-### Role
-You are a Senior Scientific Editor and Content Architect. Your goal is to evaluate the structural integrity and high-level quality of a technical document.
-
-### Task
-You may be given the subject the document was commissioned to cover (inside <subject> tags). Analyze the document as a whole: fit to the commissioned subject, narrative arc, tone consistency, and overall utility for a learner or researcher.
-
-### Strictness Clause
-* **Demanding:** Do not award a 5 unless the document exceeds professional scientific standards. A score of 3 represents "minimum viable quality."
-* **Negative Bias:** Look specifically for reasons to deduct points (e.g., hidden circular logic, generic "AI-style" filler, or lack of unique insight).
-
-### Scoring Anchors:
-* **5 (Elite):** Peer-review ready; no improvements possible.
-* **3 (Average):** Clear, but contains minor redundancies or stylistic inconsistencies.
-* **1 (Poor):** Significant logical gaps or heavy repetitive padding.
-
-### Scoring Rubric
-* subject_coverage (0-5): 5 = The commissioned subject is covered in depth; 0 = Off-topic or misinterpretation of the subject.
-* global_flow (0-5): 5 = Seamless transitions between concepts; 0 = Subject jumps or disconnected sections.
-* structural_score (0-5): 5 = Follows standard scientific/pedagogical hierarchy; 0 = Chaotic or illogical organization.
-* tone_consistency (0-5): 5 = Stable "voice" throughout; 0 = Shifts randomly between academic, casual, or marketing speak.
-* redundancy_avoidance (0-5): 5 = Every section adds new value; 0 = Significant repetitive padding.
-
-### Instructions
-Write your global_reasoning notes FIRST — they drive the scores — then assign the scores. global_reasoning must be ONE short paragraph as a single JSON string (2-3 sentences maximum): never a list, never markdown. Output your final evaluation in the requested JSON format. Ensure you respect the descriptions provided in the JSON Schema.
-""",
-
-
-    "Micro Scoring": """
-### Role
-You are a Technical Auditor and Fact-Checker. You are part of a multi-stage review pipeline. Your job is to audit a specific Chunk of a larger document.
-
-### Task
-Audit this specific chunk for technical truth, logic, and verifiability. Use the "Audit History" to ensure this chunk does not contradict previous sections.
-
-### Strictness Clause
-* **Demanding:** Do not award a 5 unless the document exceeds professional scientific standards. A score of 3 represents "minimum viable quality." 
-* **Negative Bias:** Look specifically for reasons to deduct points (e.g., hidden circular logic, generic "AI-style" filler, or lack of unique insight).
-
-### Scoring Anchors:
-* **5 (Elite):** Peer-review ready; no improvements possible.
-* **3 (Average):** Clear, but contains minor redundancies or stylistic inconsistencies.
-* **1 (Poor):** Significant logical gaps or heavy repetitive padding.
-
-### Scoring Rubric (Ground Truth):
-* logical_soundness (0-5): 5 = Premises lead perfectly to conclusions; 0 = Logic is broken or "hallucinated."
-* verifiability_score (0-5): 5 = Claims are cited or based on fundamental laws; 0 = Claims are "homeless" or fake.
-* technical_precision (0-5): 5 = Exact terminology and units; 0 = Vague, incorrect, or misleading scientific terms.
-* info_density (0-5): 5 = Straight to the point content; 0 = Fluff-heavy or content-free.
-
-### Instructions:
-* Read the "Audit History" carefully. If this chunk repeats information from a previous chunk without adding value, penalize it in your reasoning.
-* Identify any "Scientific Red Flags" (e.g., lack of controls, mismatched units).
-* Write your local_audit_notes FIRST — they drive the scores — then assign the scores and the hallucination_flag. local_audit_notes must be ONE short paragraph as a single JSON string (2-3 sentences maximum): never a list, never markdown.
-* Output your response as a JSON object matching the provided schema.
-""",
-
-
     "RAG Tool": """
 ### Role: Search Architect & Query Optimizer
 You are the query-formulation layer for a Scientific RAG system. Your goal is to translate the current mission requirements into 3 semantically distinct search strings for a Vector Database.
@@ -256,45 +198,10 @@ Output exactly 3 lines. Each line is one search query string. No numbering, no l
 """
 }
 
-# Reason-first field order (training_eval plan 1.1): with strict structured
-# decoding the model emits fields in schema order, so the free-text reasoning
-# MUST precede the scores it is supposed to drive.
-JSON_SCHEMA = {
-    "Macro Scoring": {
-        "type": "object",
-        "properties": {
-            "global_reasoning": {"type": "string", "description": "Very short notes justifying the scores. Written before the scores."},
-            "subject_coverage": {"type": "integer", "minimum": 0, "maximum": 5},
-            "global_flow": {"type": "integer", "minimum": 0, "maximum": 5},
-            "structural_score": {"type": "integer", "minimum": 0, "maximum": 5},
-            "tone_consistency": {"type": "integer", "minimum": 0, "maximum": 5},
-            "redundancy_avoidance": {"type": "integer", "minimum": 0, "maximum": 5}
-        },
-        "required": [
-            "global_reasoning", "subject_coverage", "global_flow",
-            "structural_score", "tone_consistency", "redundancy_avoidance"
-        ],
-        "additionalProperties": False
-    },
-
-    "Micro Scoring": {
-        "type": "object",
-        "properties": {
-            "local_audit_notes": {"type": "string", "description": "Very short audit notes on this chunk. Written before the scores."},
-            "logical_soundness": {"type": "integer", "minimum": 0, "maximum": 5},
-            "verifiability_score": {"type": "integer", "minimum": 0, "maximum": 5},
-            "technical_precision": {"type": "integer", "minimum": 0, "maximum": 5},
-            "info_density": {"type": "integer", "minimum": 0, "maximum": 5},
-            "hallucination_flag": {"type": "boolean"}
-        },
-        "required": [
-            "local_audit_notes", "logical_soundness", "verifiability_score",
-            "technical_precision", "info_density", "hallucination_flag"
-        ],
-        "additionalProperties": False
-    },
-
-}
+# The judge scoring schemas moved to qmix_report_writer/evaluation/judges.py
+# (training_eval plan 2.1, OD-D): they are reward code, not agent prompts.
+# This dict stays for any future AGENT that needs a structured reply.
+JSON_SCHEMA = {}
 
 
 @PromptSetRegistry.register("redacting")
@@ -313,7 +220,7 @@ class RedactingPromptSet(PromptSet):
         return ROLE_DESCRIPTION.get(role, ROLE_DESCRIPTION["Collector"])
     
     def get_schema(self, role):
-        return JSON_SCHEMA.get(role, JSON_SCHEMA["Macro Scoring"])
+        return JSON_SCHEMA.get(role, {})
 
     def get_role_connection(self):
         pass

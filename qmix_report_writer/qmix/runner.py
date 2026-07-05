@@ -12,17 +12,18 @@ with a QMIXRoundController plugged into the controller seam:
     episode the recorded transitions go to the replay buffer and train_step()
     runs.
 
-The report-quality scorer (LLM judges) is INJECTED as score_fn — the package
-does not import the repo-level experiments/ module; the CLI wires it in. The
-evaluator itself is scheduled for a separate rework.
+The report evaluator (grounded LLM judges + reward composition, package
+module qmix_report_writer/evaluation) is built here by default and remains
+injectable for tests and custom scorers.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
+from qmix_report_writer.evaluation import ReportEvaluator
 from qmix_report_writer.handcrafted_graph.graph import HandcraftedGraph, NoCorpusCoverageError
 from qmix_report_writer.handcrafted_graph.phases import (
     DRAFTING_PHASE, PLANNING_PHASE, RESEARCH_PHASE,
@@ -33,7 +34,7 @@ from qmix_report_writer.qmix.observations import get_obs_dim, get_state_dim
 from qmix_report_writer.qmix.qmix_controller import QMIXRoundController
 from qmix_report_writer.qmix.qmix_trainer import QMIXTrainer
 from qmix_report_writer.utils.config import get_config, get_output_root
-from qmix_report_writer.utils.globals import ExecutionTrace, ReportState, Score
+from qmix_report_writer.utils.globals import ExecutionTrace, ReportState
 from qmix_report_writer.utils.report_filter import filter_meta_commentary
 
 logger = logging.getLogger("qmix.runner")
@@ -64,7 +65,6 @@ def _reset_run_state() -> None:
 def build_trainer(n_agents: int, device: str = "cpu") -> QMIXTrainer:
     """QMIXTrainer wired from config; dims come from the observation builder."""
     q = get_config().get("qmix", {}) or {}
-    reward = get_config().get("reward", {}) or {}
     return QMIXTrainer(
         n_agents=n_agents,
         obs_dim=get_obs_dim(),
@@ -80,8 +80,6 @@ def build_trainer(n_agents: int, device: str = "cpu") -> QMIXTrainer:
         buffer_capacity=int(q.get("buffer_capacity", 5000)),
         batch_size=int(q.get("batch_size", 32)),
         grad_clip=float(q.get("grad_clip", 10.0)),
-        length_weight=float(reward.get("length_weight", 0.1)),
-        report_quality_weight=float(reward.get("report_quality_weight", 1.0)),
         device=device,
     )
 
@@ -173,7 +171,7 @@ async def run_qmix(
 
 async def run_qmix_train(
     tasks: Sequence[str],
-    score_fn: Callable,
+    evaluator=None,
     llm_name: Optional[str] = None,
     agent_names: Optional[List[str]] = None,
     num_episodes: Optional[int] = None,
@@ -189,8 +187,8 @@ async def run_qmix_train(
     Args:
         tasks: Report subjects, cycled across episodes (injected by the CLI —
                the package does not import the repo-level datasets module).
-        score_fn: Async () -> float report scorer (the LLM judges; injected by
-               the CLI from experiments/eval.py until the evaluator rework).
+        evaluator: ReportEvaluator-like scorer; None builds the default
+               grounded evaluator from config (injectable for tests).
     """
     cfg = get_config()
     tcfg = (cfg.get("qmix", {}) or {}).get("training", {}) or {}
@@ -208,6 +206,8 @@ async def run_qmix_train(
     trainer = build_trainer(len(agent_names), device=device)
     if resume_path:
         trainer.load(resume_path)
+    if evaluator is None:
+        evaluator = ReportEvaluator()
 
     epsilon = eps_start
     eps_decay = (eps_start - eps_end) / max(num_episodes, 1)
@@ -224,7 +224,7 @@ async def run_qmix_train(
             agent_names,
             train=True,
             epsilon=epsilon,
-            score_fn=score_fn,
+            evaluator=evaluator,
             length_goal=int(reward_cfg.get("length_goal", 25000)),
             length_sigma=int(reward_cfg.get("length_sigma", 8500)),
         )
@@ -265,7 +265,10 @@ async def run_qmix_train(
         ep_elapsed = time.time() - ep_start
         total_elapsed = time.time() - train_start
         remaining = (total_elapsed / (ep_idx + 1)) * (num_episodes - ep_idx - 1)
-        score = Score.instance().current_score or 0.0
+        chunk = controller.last_chunk_score
+        macro = controller.macro_score
+        chunk_str = f"{chunk.score:.2f}" if chunk else "n/a"
+        macro_str = f"{macro.score:.2f}" if macro else "n/a"
         total_reward = episode.total_reward
         loss_str = f"loss={train_info['loss']:.4f}" if train_info else "loss=n/a"
         status = f"ABORTED ({aborted[:60]}…)" if aborted else \
@@ -274,7 +277,9 @@ async def run_qmix_train(
         print(f"\n--- Episode {ep_idx + 1}/{num_episodes} [{ep_elapsed:.1f}s] ---")
         print(f"  Task:   {task[:80]}...")
         print(f"  Output: {status}...")
-        print(f"  score={score:.2f} | total reward={total_reward:.3f} | "
+        print(f"  chunk={chunk_str} | macro={macro_str} | "
+              f"judge_fails={controller.judge_failures} | "
+              f"total reward={total_reward:.3f} | "
               f"steps={episode.length} | tokens={episode.total_tokens} | "
               f"eps={epsilon:.3f} | {loss_str}")
         print(f"  Elapsed: {total_elapsed:.0f}s | ETA: {remaining:.0f}s "

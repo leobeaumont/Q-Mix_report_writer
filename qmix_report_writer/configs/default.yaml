@@ -54,8 +54,15 @@ qmix:
     embedding_dim: 16
 
 reward:
-  report_quality_weight: 1.0
+  # Reward v2 (training_eval plan 2.4 — TD1/TD2): per append event the reward
+  # is quality_weight * grounded_chunk_score + length_weight * delta_length_gauss,
+  # landing on the event step only (OD-A); at run end macro_weight * macro_score
+  # is added to the final step; token_weight * tokens/10k is subtracted per
+  # recorded step (TD2: flag-gated, ships DISABLED at 0.0).
+  quality_weight: 1.0
+  macro_weight: 1.0
   length_weight: 0.1
+  token_weight: 0.0
   length_goal: 25000  # 25000 char -> ~4500 words -> ~1 scientific document
   length_sigma: 8500  # sigma of the gaussian curve: 8500 -> reward start at ~5000 char
   # LLM-judge settings (training_eval plan 1.2) — the judges are deliberately

@@ -6,9 +6,9 @@ D6: PLANNING→RESEARCH→DRAFTING, no correction phases, no finalization) with 
 QMIXRoundController choosing the communication topology; recorded transitions
 feed the replay buffer and a train_step() runs per episode.
 
-The report scorer (LLM judges from experiments/eval.py) and the task list
-(datasets/tasks.py) are wired here — the installable package depends on
-neither.
+The task list (datasets/tasks.py) is wired here — the report evaluator
+(grounded judges + reward composition) lives in the package
+(qmix_report_writer/evaluation) and is built by the runner.
 
 Usage (from project root):
     python experiments/run_qmix_train.py --num-episodes 50 --trace
@@ -28,7 +28,6 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets.tasks import tasks
-from experiments.eval import report_score
 from qmix_report_writer.qmix.runner import run_qmix_train
 from qmix_report_writer.utils.config import get_config
 
@@ -74,7 +73,6 @@ def main():
     asyncio.run(
         run_qmix_train(
             tasks=tasks,
-            score_fn=report_score,
             llm_name=llm_name,
             num_episodes=args.num_episodes,
             device=args.device,

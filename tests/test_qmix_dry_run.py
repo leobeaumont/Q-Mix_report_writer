@@ -9,7 +9,8 @@ QMIXRoundController + HandcraftedGraph seam, and asserts:
   * masks are respected on every recorded step (the controller also asserts
     this internally and would raise),
   * episode transitions have the right shapes (obs/actions/mask/global_state),
-  * reward events fire only on real appends and spread over buffered steps,
+  * reward events fire only on real appends and land on the EVENT STEP only
+    (OD-A), with the terminal macro added to the final step (reward v2),
   * the episode feeds the replay buffer and a train_step() runs.
 
 The real tiny-model dry run (live Ollama) is the user-run half of checkpoint
@@ -89,15 +90,28 @@ async def test_random_policy_dry_run():
     from qmix_report_writer.qmix.qmix_controller import QMIXRoundController
     from qmix_report_writer.qmix.runner import build_trainer
 
-    # Mock scorer with increasing values -> nonzero score deltas -> nonzero rewards.
-    scores = iter([0.40, 0.55, 0.65, 0.70, 0.75])
+    # Stub evaluator (reward v2 interface): per-chunk scores + terminal macro.
+    from types import SimpleNamespace
 
-    async def mock_score():
-        return next(scores)
+    chunk_values = iter([0.55, 0.65, 0.75, 0.80, 0.85])
 
+    class _StubEvaluator:
+        def __init__(self):
+            self.chunk_calls = 0
+            self.macro_calls = 0
+
+        async def score_chunk(self, chunk, sources, task, context=None):
+            self.chunk_calls += 1
+            return SimpleNamespace(score=next(chunk_values), grounding_ratio=1.0)
+
+        async def score_report(self, task, outline, report):
+            self.macro_calls += 1
+            return SimpleNamespace(score=0.7)
+
+    evaluator = _StubEvaluator()
     trainer = build_trainer(len(AGENTS))
     controller = QMIXRoundController(
-        trainer, AGENTS, train=True, epsilon=1.0, score_fn=mock_score,
+        trainer, AGENTS, train=True, epsilon=1.0, evaluator=evaluator,
     )
 
     with patch("qmix_report_writer.agents.researcher.RAGManager", _StubRAG):
@@ -131,13 +145,20 @@ async def test_random_policy_dry_run():
             assert step.mask[i][action], f"mask violated: agent {i} action {action}"
         assert not step.mask[:, 0].all() or True  # masks exist per agent
 
-    # Reward events fired on the two real appends (both sections written by
-    # the scripted write round), spreading nonzero rewards; leftovers are 0.
+    # Reward v2 placement: one event per real append, landing on the event
+    # step only (OD-A); the terminal macro is added to the final step; all
+    # other steps carry exactly 0 (token term is flag-gated off).
     assert len(ReportState.instance().sections) == 2
+    assert evaluator.chunk_calls == 2, "one grounded chunk call per append"
+    assert evaluator.macro_calls == 1, "exactly one terminal macro call"
     rewarded = [s for s in episode.steps if s.team_reward != 0.0]
-    assert rewarded, "no step carries reward despite successful appends"
+    assert len(rewarded) == 2, (
+        f"expected exactly the two event steps to carry reward, "
+        f"got {len(rewarded)}"
+    )
+    assert episode.steps[-1].team_reward > 0.7, \
+        "final step must include the terminal macro reward"
     assert episode.steps[-1].done is True
-    assert Score.instance().current_score is not None
 
     # Replay + one training step (duplicate the episode to fill a batch).
     for _ in range(trainer.batch_size):

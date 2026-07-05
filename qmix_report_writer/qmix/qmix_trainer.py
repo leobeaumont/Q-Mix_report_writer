@@ -52,8 +52,6 @@ class QMIXTrainer:
         buffer_capacity: int = 5000,
         batch_size: int = 32,
         grad_clip: float = 10.0,
-        length_weight: float = 0.1,
-        report_quality_weight: float = 1.0,
         device: str = "cpu",
     ):
         self.n_agents = n_agents  # with collector agent
@@ -65,8 +63,6 @@ class QMIXTrainer:
         self.target_update_interval = target_update_interval
         self.batch_size = batch_size
         self.grad_clip = grad_clip
-        self.length_weight = length_weight
-        self.report_quality_weight = report_quality_weight
         self.device = device
         self.training_step = 0
 
@@ -93,18 +89,8 @@ class QMIXTrainer:
         self.optimizer = optim.Adam(self.params, lr=lr)
         self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
 
-    def compute_reward(
-        self,
-        delta_report_score: float,
-        delta_length_goal: int,
-    ) -> float:
-        """Compute composite reward: delta report score + delta token goal.
-
-        Goal: maximize the quality of addition, reward working toward a token goal.
-        """
-        report_reward = delta_report_score * self.report_quality_weight
-        length_reward = delta_length_goal * self.length_weight
-        return report_reward + length_reward
+    # NOTE: reward composition moved to qmix_report_writer/evaluation/reward.py
+    # (training_eval plan 2.5, report B0.4) — the trainer is pure TD machinery.
 
     def select_actions(
         self,

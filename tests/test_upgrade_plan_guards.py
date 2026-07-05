@@ -114,17 +114,14 @@ def test_node_import_and_eval_standalone():
     from qmix_report_writer.graph import Node as _Node
     assert _Node is Node
 
-    # experiments/eval.py must import standalone (it survives Stage 1.1 and is
-    # reused by the Stage 4.4 reward hook).
-    from experiments.eval import length_score, report_score
-    assert callable(report_score)
-
-    _reset_singletons()
-    rs = ReportState.instance()
-    rs.content = "x" * 25000
-    assert abs(length_score(25000, 8500) - 1.0) < 1e-9
-    rs.content = ""
-    assert length_score(25000, 8500) < 0.05
+    # Re-pointed by the training_eval rework (plan 2.6): experiments/eval.py
+    # was replaced by the qmix_report_writer.evaluation package; the
+    # length-gaussian value pins moved with it (same values, new home).
+    from qmix_report_writer.evaluation import ReportEvaluator
+    from qmix_report_writer.evaluation.reward import length_gaussian
+    assert callable(ReportEvaluator)
+    assert abs(length_gaussian(25000, 25000, 8500) - 1.0) < 1e-9
+    assert length_gaussian(0, 25000, 8500) < 0.05
     print("PASS  test_node_import_and_eval_standalone")
 
 
@@ -425,22 +422,12 @@ def test_trainer_select_actions_shape():
 
 
 # ---------------------------------------------------------------------------
-# Stage 4.4 — reward-hook contract pins (score deltas + append/skip mechanics)
+# Stage 4.4 — reward-hook contract pins (append/skip mechanics)
 # ---------------------------------------------------------------------------
-
-def test_score_delta_semantics():
-    _reset_singletons()
-    score = Score.instance()
-    score.update(0.5)
-    assert score.get_delta() == 0.5          # first update: delta = current value
-    score.update(0.7)
-    assert abs(score.get_delta() - 0.2) < 1e-9
-
-    goal = LengthGoal.instance()
-    goal.update(0.3)
-    goal.update(0.25)
-    assert abs(goal.get_delta() - (-0.05)) < 1e-9
-    print("PASS  test_score_delta_semantics")
+# test_score_delta_semantics RETIRED by the training_eval rework (plan 2.5):
+# the Score/LengthGoal delta machinery left the reward path — reward v2 is
+# per-chunk + terminal macro (see qmix_report_writer/evaluation/reward.py;
+# tests/test_training_eval_*.py pin the new semantics).
 
 
 def test_collector_append_and_skip():
@@ -575,7 +562,6 @@ async def _run_all():
         ("test_parse_section_titles", test_parse_section_titles),
         ("test_action_space_consistency", test_action_space_consistency),
         ("test_trainer_select_actions_shape", test_trainer_select_actions_shape),
-        ("test_score_delta_semantics", test_score_delta_semantics),
         ("test_collector_append_and_skip", test_collector_append_and_skip),
         ("test_absence_and_sentinel_pins", test_absence_and_sentinel_pins),
         ("test_context_block_action_rendering", test_context_block_action_rendering),

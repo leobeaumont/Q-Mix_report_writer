@@ -106,48 +106,48 @@
 - **Amendment #3 (2026-07-05, after the third live attempt showed frequent skips):** failures were long `global_reasoning` essays exhausting the token budget before the scores (reason-first makes truncation fatal) — and the probable root cause of BOTH the rambling and the earlier markdown/XML replies is Ollama's **silent 4096-token default context**: the macro prompt is 10-15k tokens, so the system prompt with all instructions was being silently dropped. Fix pulled forward from the Stage-2 note: judges now call Ollama's **native `/api/chat` structured outputs** (`_NativeJudgeLLM` in eval.py) — grammar-constrained decoding (malformed JSON impossible), explicit `reward.judge.num_ctx: 32768`, no frequency_penalty on judge calls, token accounting kept. `_judge_call`/conformance/retry machinery unchanged on top. Payload shape verified offline (endpoint, format, options); acceptance re-pointed to the `_judge_llm` seam. Stage 2's evaluator inherits this transport. NEW `experiments/judge_smoke.py` (30-second macro+micro health check, to run before any long live run) — **verified LIVE 2026-07-05**: composite 0.668, chunk 0.80, coherent notes, 8.8 s/pair, zero retries.
 - **Amendment #4 (2026-07-05, fourth live attempt still skipped chunks):** live diagnosis on the exact failing input settled it — the reply was **complete, valid, `done_reason=stop`, 100/3072 tokens, containing ONLY `global_reasoning`**: Ollama's grammar-constrained decoding does **not enforce `required`**, and reason-first ordering makes "close the object after the notes" natural. Fix: `_judge_call` is now a **field-completion loop** — every attempt keeps the conformed fields it received and re-asks ONLY for the missing ones (`_sub_schema`; after a reasoning-only reply that is a scores-only sub-schema, with the reasoning fed back as context — reason-then-score preserved). No-progress attempts resample at ≥0.35; productive follow-ups stay at temp 0. **Live-verified on the previously-failing ACCADA_v012 chunks 1–3: scores [0.45, 0.275, 0.55], zero judge failures.** Acceptance extended with a completion-loop probe (partial kept, follow-up sub-schema, reasoning context).
 
-### 1.4 `[ ]` **LIVE** Benchmark re-run #1
+### 1.4 `[x]` **LIVE** Benchmark re-run #1
 - **What:** Re-run 0.3's protocol on the de-noised judges. Expectation: repeat-variance collapses (temp 0), ranking accuracy ≥ baseline. Record deltas here.
-- **Done note:** —
+- **Done note:** 2026-07-05 (results: `benchmark_rank_legacy_20260705_023308`, `benchmark_repeat_legacy_20260705_025056`). **Ranking accuracy 0.35 → 0.800** (16/20 pairs); **repeat σ 0.0127 → 0.0000** (five identical 0.7161 runs — fully deterministic reward). Judge failures: 1 chunk of ~123 (0.8 %), skipped gracefully (the reply failed to parse identically across resamples — rare pathological input, acceptable under the skip policy). Remaining inversions are exactly the pattern the report predicted Stage 2 must fix: the Towards middle band (v06 0.661 > v18 0.625 > v20 0.622) and one ACCADA pair (v019 > v026, the doc with the failed chunk) — ungrounded style-judging can't separate mid-revisions. **STAGE 1 COMPLETE.**
 
 ---
 
 ## Stage 2 — Evaluation module & reward v2 (TD1/TD2/TD3, OD-A, OD-D)
 
-### 2.1 `[ ]` Package module `qmix_report_writer/evaluation/` *(report A2.1)*
+### 2.1 `[x]` Package module `qmix_report_writer/evaluation/` *(report A2.1)*
 - **What:** New package: `judges.py` (prompts + schemas move here per OD-D — `redacting_prompt_set.py` loses "Macro Scoring"/"Micro Scoring"; registry fallback behavior unaffected), `reward.py` (composition + the single `length_gaussian` home — closes A0.7), dataclasses `ChunkScore` (rubric scores, `grounding_ratio`, claim verdict counts, `contradicted` flag, notes, combined `score` ∈ [0,1]) and `MacroScore` (rubric scores + combined `score`). `class ReportEvaluator(llm=None)` reads `reward.judge.*` config; async `score_chunk(chunk, sources, task, context) -> ChunkScore | None` and `score_report(task, outline, report) -> MacroScore | None` (`None` = judge failure per 1.3).
 - **Test:** acceptance `test_stage2_1_evaluation_module` (imports, dataclass fields, prompt entries gone from the prompt set, method signatures).
-- **Done note:** —
+- **Done note:** 2026-07-05 — `qmix_report_writer/evaluation/` created: `judges.py` (ReportEvaluator, prompts+schemas per OD-D, the native transport + field-completion `_judge_call` moved here), `reward.py`, `__init__.py` exporting ChunkScore/MacroScore/ReportEvaluator + the reward fns. `redacting_prompt_set.py` lost both "…Scoring" ROLE_DESCRIPTION + JSON_SCHEMA entries (JSON_SCHEMA now `{}`, `get_schema` fallback → `{}`). Acceptance PASS.
 
-### 2.2 `[ ]` Grounded micro judge + claim check *(report A1.2, TD3)*
+### 2.2 `[x]` Grounded micro judge + claim check *(report A1.2, TD3)*
 - **What:** `score_chunk` = two judge calls: (1) chunk audit — prompt contains task, the section's source chunks, progress summary, chunk; verifiability rubric rewritten as "supported by the provided sources"; (2) claim check — extract factual claims, verdict each against the sources (`supported/unsupported/contradicted`) → `grounding_ratio`. Combined `score`: rubric mean modulated by grounding (contradiction hurts more than absence; exact formula documented in code + config-weighted if simple). Empty-source sections (possible: Collector can append with no new sources) get the audit call only, `grounding_ratio=None`, score = rubric mean — never a spurious penalty.
 - **Test:** acceptance `test_stage2_2_grounded_micro` (structural: two calls, sources + task in the prompts, ChunkScore contract, no-sources path clean); the verdict-ordering semantics (contradicted < unsupported < supported) land in a dedicated `tests/test_evaluation.py` written with this stage.
-- **Done note:** —
+- **Done note:** 2026-07-05 — `score_chunk` = audit call + (when sources) claim-check call. Grounding factor = `(n_supported + 0.5·n_unsupported) / n_claims` (supported full, unsupported half, contradicted zero — contradiction hurts more than absence); `score = rubric_mean · (0.5 if hallucination_flag) · factor`. No sources → audit only, `grounding_ratio=None`, no modulation; no claims → factor 1.0 (no penalty). `tests/test_evaluation.py` (6 tests) pins the ordering, the flag-halving, and both no-penalty paths. Acceptance PASS.
 
-### 2.3 `[ ]` Terminal macro judge *(report A1.3)*
+### 2.3 `[x]` Terminal macro judge *(report A1.3)*
 - **What:** `score_report(task, outline, report)`: one call on the full report with the task and `planned_sections`; rubric = coverage-vs-task/outline, flow, structure, redundancy (renamed key). Used at run end only.
 - **Test:** acceptance `test_stage2_3_terminal_macro` (prompt carries task + outline; score composed from stub JSON).
-- **Done note:** —
+- **Done note:** 2026-07-05 — `score_report` renders `<subject>`/`<outline>`/`<report>`, one macro call, `MacroScore.score = sum(5 rubric fields)/25`. Acceptance PASS; `test_evaluation.py::test_macro_composition_and_prompt` pins composition + task/outline in the prompt.
 
-### 2.4 `[ ]` Reward composition v2 *(report A1.1, TD1/TD2)*
+### 2.4 `[x]` Reward composition v2 *(report A1.1, TD1/TD2)*
 - **What:** `reward.py`: `compose_event_reward(chunk_score, delta_length_gauss, cfg)` = `quality_weight·chunk.score + length_weight·Δgauss`; `compose_terminal_reward(macro_score, cfg)` = `macro_weight·macro.score`; per-step token penalty `token_weight·(tokens/10_000)` subtracted at flush time (flag-gated: default weight 0.0). Config `reward:` v2: `quality_weight, macro_weight, length_weight, token_weight, length_goal, length_sigma, judge.{model, temperature, max_tokens, retries, samples}` — every key read by code *(report A2.3)*.
 - **Test:** acceptance `test_stage2_4_reward_composition` (pure math incl. token term on/off; config keys read; defaults match the table).
-- **Done note:** —
+- **Done note:** 2026-07-05 — `reward.py`: `length_gaussian`, `compose_event_reward`, `compose_terminal_reward`, `token_penalty`. Config `reward:` v2 = quality_weight 1.0 / macro_weight 1.0 / length_weight 0.1 / token_weight 0.0 (TD2 off) + length_goal/sigma + the judge block from Stage 1. Judge `samples` key NOT added (the field-completion loop + temp-0 made median-of-k unnecessary; noted as a future knob if needed). Acceptance PASS.
 
-### 2.5 `[ ]` Controller rewiring *(report A1.1/A1.3 wiring; absorbs B0.4; OD-A)*
+### 2.5 `[x]` Controller rewiring *(report A1.1/A1.3 wiring; absorbs B0.4; OD-A)*
 - **What:** `QMIXRoundController(trainer, agent_names, train, epsilon, evaluator=None, ...)` — `score_fn` replaced by the evaluator (breaking, sanctioned). `_reward_event`: score the *just-appended* section (`sections[-1]` content + sources) → event reward assigned to the **most recent recorded step only** (OD-A); earlier buffered steps flush 0 at that moment; judge failure → event skipped, buffer intact (1.3). `on_run_end`: flush leftovers at 0 (minus token term), then if training and report non-empty → `score_report` → terminal reward **added to the final step's** `team_reward`; still idempotent. `trainer.compute_reward` + `length_weight`/`report_quality_weight` deleted from the trainer. `Score`/`LengthGoal` singletons retired from the reward path (kept only as plain last-value holders for the episode print, or deleted if nothing else reads them — decide in-commit). **Retire `test_score_delta_semantics` in this commit.**
 - **Test:** acceptance `test_stage2_5_controller_rewired` (offline scripted episode through the real controller with a stub evaluator: event reward on the event step only, zeros elsewhere, terminal macro on last step, skip-on-failure, token term applied when weight > 0); guards `test_reward_event_on_append_only`, `test_on_run_end_idempotent` stay green.
-- **Done note:** —
+- **Done note:** 2026-07-05 — `QMIXRoundController(..., evaluator=None)` replaces `score_fn`. `_reward_event`: scores `sections[-1]` (content + stored sources), reward on the EVENT STEP only (`*earlier, event_step = buffer`), earlier steps flush 0; judge None → skip + `judge_failures++`, buffer kept. `on_run_end`: leftovers at 0, then `score_report(task, planned_sections, content)` → `compose_terminal_reward` added to the final step. `token_penalty` subtracted per step at finalize (off by default). Length gaussian baseline captured at construction; `_task` captured in `round_plan`. `trainer.compute_reward` + length/quality weights DELETED from the trainer (B0.4). `Score`/`LengthGoal` left in globals (still reset by the shared handcrafted `_reset_singletons`; no longer read in the reward path — harmless, kept to preserve handcrafted no-drift). `test_score_delta_semantics` retired (guards 20→19). Acceptance PASS; both named guards green.
 
-### 2.6 `[ ]` Runner/CLI wiring + `experiments/eval.py` retirement
+### 2.6 `[x]` Runner/CLI wiring + `experiments/eval.py` retirement
 - **What:** `run_qmix_train(tasks, evaluator=None, ...)` (builds a default `ReportEvaluator` when None); `experiments/run_qmix_train.py` updated (no `report_score` import); `experiments/eval.py` **deleted** — the benchmark harness's legacy adapter (0.2) carries its own frozen copy of the old prompts if still needed for comparison runs, or the harness keeps only the v2 adapter once 2.8 is recorded. **Re-point `test_node_import_and_eval_standalone` in this commit** (drop the `experiments.eval` import; keep the Node pin; length-gaussian pin moves to the evaluation module import).
 - **Test:** acceptance `test_stage2_6_runner_wiring` (runner signature; CLI imports clean; `experiments/eval.py` gone).
-- **Done note:** —
+- **Done note:** 2026-07-05 — `run_qmix_train(tasks, evaluator=None, …)`; runner builds `ReportEvaluator()` when None; episode print now shows chunk/macro/judge_fails from the controller (no more `Score.instance()`). CLI drops the `report_score` import. `experiments/eval.py` + `tests/test_scorer.py` `git rm`'d. Benchmark harness's `legacy` adapter removed → default `v2` adapter (grounded evaluator; corpus PDFs are source-less so it exercises the audit path + terminal macro, composite `0.3·macro+0.7·mean(chunk)` for comparability). `judge_smoke.py` rewritten for the evaluator (grounded chunk with a source + macro). Re-pointed BOTH old suites: guard `test_node_import_and_eval_standalone` → evaluation package + `length_gaussian`; acceptance `test_stage1_1_legacy_deleted` → asserts eval.py gone + `ReportEvaluator` importable. Acceptance PASS; old acceptance 12/12, old guards 19/19.
 
-### 2.7 `[ ]` Offline test refresh
+### 2.7 `[x]` Offline test refresh
 - **What:** Update `tests/test_qmix_dry_run.py` to the evaluator interface (stub evaluator instead of stub score_fn); assert the new reward placement (event step + terminal) inside the dry run. Full battery green.
 - **Test:** the dry-run suite itself + full battery.
-- **Done note:** —
+- **Done note:** 2026-07-05 — dry run uses a stub evaluator (per-chunk `score_chunk` + terminal `score_report`); asserts exactly 2 chunk calls / 1 macro call, reward on exactly the 2 event steps, final step > 0.7 (carries the terminal macro), done flag. NEW `tests/test_evaluation.py` (6 semantic tests). Full offline battery green: new guards 6, new acceptance 10 PASS/12 PEND, evaluation 6, dry-run/fidelity/training-shape/observations, old guards 19, old acceptance 12, review/PBDS suites.
 
 ### 2.8 `[ ]` **LIVE** Benchmark re-run #2 (evaluator v2)
 - **What:** Run the harness with the v2 adapter (grounded scoring needs source chunks — for benchmark PDFs, source-less mode exercises the audit path; add one RAG-backed run on a generated report for the grounded path). Compare against 0.3/1.4: ranking accuracy must not regress, corruption probes must pass (off-topic ↓ `subject_coverage`, perturbed numbers ↓ grounding). Record here.
@@ -255,9 +255,9 @@ None — TD1–TD4 and OD-A–D are all settled (see decision log). New decision
 | Stage | Items | Done |
 |-------|-------|------|
 | 0 — Guardrails & baseline | 3 | 3 |
-| 1 — Judge de-noising | 4 | 3 |
-| 2 — Evaluation module & reward v2 | 8 | 0 |
+| 1 — Judge de-noising | 4 | 4 |
+| 2 — Evaluation module & reward v2 | 8 | 7 |
 | 3 — Trainer correctness | 7 | 0 |
 | 4 — Loop engineering | 5 | 0 |
 | 5 — Docs & sync | 4 | 0 |
-| **Total** | **31** | **0** |
+| **Total** | **31** | **14** |

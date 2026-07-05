@@ -12,8 +12,10 @@ versioned real papers in tests/test_documents/:
     numbers perturbed: the score must drop vs the clean run.
 
 The scoring path is a pluggable async *adapter* `(task, chunks) -> result
-dict`, so the same protocol runs the legacy `experiments.eval.report_score`
-(Stage 0.3 baseline) and the Stage-2 evaluator (2.8 re-run).
+dict`. The default `v2` adapter runs the Stage-2 grounded `ReportEvaluator`
+(Stage 2.8 re-run). The legacy adapter was removed with experiments/eval.py
+in Stage 2.6 — the Stage 0.3/1.4 baselines it produced are archived in
+tests/scoring_results/.
 
 Metric functions are pure and offline-tested (test_training_eval_acceptance
 Stage 0.2); actually scoring documents needs the live Ollama judges.
@@ -168,68 +170,68 @@ def discover_families(docs_dir: str = DOCS_DIR):
 # Scorer adapters
 # ---------------------------------------------------------------------------
 
-def _reset_scoring_state():
-    from qmix_report_writer.utils.globals import ReportState, Score, LengthGoal
-    ReportState.instance().reset()
-    try:
-        Score.instance().reset()
-        LengthGoal.instance().reset()
-    except Exception:
-        pass
+async def evaluator_scorer_adapter(task, chunks, evaluator=None) -> dict:
+    """Scoring through the v2 grounded evaluator (Stage 2, TD1 shape).
 
+    Each chunk is scored on its own (`score_chunk`; the corpus PDFs carry no
+    stored sources, so this exercises the audit-only path), then ONE terminal
+    macro call scores the whole document — the same per-chunk + terminal
+    structure the training reward uses. Final composite mirrors the legacy
+    weighting for comparability: 0.3 * macro + 0.7 * mean(chunk scores).
 
-async def legacy_scorer_adapter(task, chunks) -> dict:
-    """Incremental scoring through the CURRENT judges (experiments.eval).
-
-    Frozen protocol from tests/test_scorer.py: append each chunk with a
-    placeholder summary, score after every append, final composite = last
-    report_score value. `task` is forwarded to the judges when given; the
-    benchmark passes None for the corpus PDFs (their commissioned subject is
-    unknown — a family stem is not a subject).
+    `evaluator` is injectable for tests; None builds the config default.
     """
-    # Local import: this module must stay importable after Stage 2.6 deletes
-    # experiments/eval.py (the adapter itself then becomes unusable, which is
-    # fine — the v2 adapter takes over).
-    import inspect
+    from qmix_report_writer.evaluation import ReportEvaluator
 
-    from experiments.eval import report_score
+    if evaluator is None:
+        evaluator = ReportEvaluator()
 
-    _reset_scoring_state()
-    from qmix_report_writer.utils.globals import ReportState, Score
-
-    kwargs = {}
-    if task is not None and "task" in inspect.signature(report_score).parameters:
-        kwargs["task"] = task
-
-    chunk_scores, composite, failures = [], 0.0, 0
+    chunk_scores, failures = [], 0
     for i, chunk in enumerate(chunks):
-        ReportState.instance().append(chunk, f"Summary placeholder, chunk {i + 1}")
-        try:
-            composite = await report_score(**kwargs)
-            chunk_scores.append(Score.instance().micro_scores[-1])
-        except Exception as exc:
+        result = await evaluator.score_chunk(
+            chunk=chunk, sources=[], task=task, context=None,
+        )
+        if result is None:
             # Mirror the training controller (plan 1.3): a failed judge skips
             # this chunk's measurement instead of killing an hours-long run.
             failures += 1
             chunk_scores.append(None)
-            print(f"  [judge failure on chunk {i + 1}/{len(chunks)}: {exc}]")
-    if chunks and failures == len(chunks):
+            print(f"  [judge failure on chunk {i + 1}/{len(chunks)}]")
+        else:
+            chunk_scores.append(result.score)
+
+    valid = [s for s in chunk_scores if s is not None]
+    if chunks and not valid:
         raise RuntimeError(
             f"all {failures} chunks failed to score — judge/endpoint is down; "
             f"aborting instead of reporting a fake score"
         )
-    _reset_scoring_state()
-    return {"final_score": float(composite), "chunk_scores": chunk_scores,
-            "judge_failures": failures}
+
+    macro = await evaluator.score_report(
+        task=task or "", outline=[], report="\n\n".join(chunks),
+    )
+    if macro is None:
+        failures += 1
+        print("  [judge failure on the terminal macro call]")
+
+    micro_mean = sum(valid) / len(valid) if valid else 0.0
+    macro_score = macro.score if macro is not None else 0.0
+    return {
+        "final_score": 0.3 * macro_score + 0.7 * micro_mean,
+        "macro_score": macro_score,
+        "chunk_scores": chunk_scores,
+        "judge_failures": failures,
+    }
 
 
 def get_adapter(name: str):
-    if name == "legacy":
-        return legacy_scorer_adapter
     if name == "v2":
-        # Stage 2.8: wire the ReportEvaluator-based adapter here.
-        from qmix_report_writer.evaluation import benchmark_adapter  # noqa: F401
-        return benchmark_adapter
+        return evaluator_scorer_adapter
+    if name == "legacy":
+        raise ValueError(
+            "the legacy scorer was removed in Stage 2.6 (experiments/eval.py "
+            "deleted); its baseline results are archived in tests/scoring_results/"
+        )
     raise ValueError(f"unknown adapter '{name}'")
 
 
@@ -329,7 +331,7 @@ def save_results(results: dict, adapter_name: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Benchmark the report scorer.")
     parser.add_argument("mode", choices=["rank", "repeat", "corrupt"])
-    parser.add_argument("--adapter", default="legacy", choices=["legacy", "v2"])
+    parser.add_argument("--adapter", default="v2", choices=["legacy", "v2"])
     parser.add_argument("--doc", help="Document stem (repeat/corrupt modes).")
     parser.add_argument("-k", type=int, default=5, help="Repeat count.")
     args = parser.parse_args()

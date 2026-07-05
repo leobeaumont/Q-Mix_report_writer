@@ -71,8 +71,13 @@ def test_stage1_1_legacy_deleted():
         with open("experiments/run_qmix_train.py", encoding="utf-8") as f:
             assert "QMIXGraph" not in f.read(), "old run_qmix_train still in place"
 
-    import experiments.eval  # must keep importing standalone
-    assert callable(experiments.eval.report_score)
+    # experiments/eval.py was removed by the training_eval rework (plan 2.6);
+    # the report scorer now lives in the package. Pin the replacement so this
+    # legacy-deletion test still asserts "the QMIX path has a working scorer".
+    assert not os.path.exists("experiments/eval.py"), \
+        "experiments/eval.py should be deleted (replaced by evaluation package)"
+    from qmix_report_writer.evaluation import ReportEvaluator
+    assert callable(ReportEvaluator)
 
 
 # ---------------------------------------------------------------------------

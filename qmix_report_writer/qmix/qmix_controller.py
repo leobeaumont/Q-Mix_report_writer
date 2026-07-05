@@ -18,21 +18,28 @@ Environment invariant: a round whose RoundTopology hard-requires the Collector
 (the DRAFTING round-B retry) keeps its table edges into the Collector, so the
 write still happens regardless of what the policy chose.
 
-Reward events (Stage 4.4, absorbs legacy bug 0.8): fired from on_round_end
-when ReportState.additions actually GREW — never from the chosen action — so a
-refused append (absence-marker gate, sentinel output) costs no judge calls and
-never skews the score deltas. The reward is spread evenly over all steps
-buffered since the previous event; leftovers flush at 0 on run end.
+Reward events (reward v2 — training_eval plan 2.5, decisions TD1/TD2/OD-A):
+fired from on_round_end when ReportState.additions actually GREW — never from
+the chosen action. The appended section is scored by the injected evaluator
+(grounded chunk audit + claim check); the composed reward lands on the EVENT
+STEP only (OD-A) while earlier buffered steps flush at 0 — TD bootstrapping
+propagates the credit. At run end the terminal macro score is added to the
+final step. A judge failure skips the event (steps stay buffered; a parse or
+transport hiccup never becomes a score). The flag-gated token penalty (TD2,
+default off) is subtracted from every recorded step at finalization.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
 
+from qmix_report_writer.evaluation.reward import (
+    compose_event_reward, compose_terminal_reward, length_gaussian, token_penalty,
+)
 from qmix_report_writer.handcrafted_graph.controller import RoundController, RoundPlan
 from qmix_report_writer.qmix.action_masks import masks_for_round
 from qmix_report_writer.qmix.agent_network import NUM_ACTIONS
@@ -40,8 +47,9 @@ from qmix_report_writer.qmix.observations import (
     build_adj, build_global_state, build_observations,
 )
 from qmix_report_writer.qmix.replay_buffer import Episode, EpisodeStep
+from qmix_report_writer.utils.config import get_config
 from qmix_report_writer.utils.globals import (
-    CompletionTokens, LengthGoal, PromptTokens, ReportState, Score,
+    CompletionTokens, PromptTokens, ReportState,
 )
 
 logger = logging.getLogger("qmix_controller")
@@ -100,17 +108,16 @@ class QMIXRoundController(RoundController):
     """RoundController driven by the QMIX networks.
 
     Args:
-        trainer: QMIXTrainer whose agent network selects actions (and whose
-                 compute_reward combines the score deltas).
+        trainer: QMIXTrainer whose agent network selects actions.
         agent_names: Full roster INCLUDING the Collector, in graph order.
         train: ε-greedy exploration + episode recording + reward events.
                False = greedy inference, nothing recorded.
         epsilon: Exploration rate used when train=True.
-        score_fn: Async () -> float report-quality scorer (the LLM judges).
+        evaluator: ReportEvaluator-like object (async score_chunk /
+                  score_report, both may return None on judge failure).
                   None disables reward events (steps flush at reward 0 —
                   useful for offline dry runs).
-        length_goal / length_sigma: Gaussian length-score parameters
-                  (env-side re-statement of the legacy length_score).
+        length_goal / length_sigma: Gaussian length-shaping parameters.
     """
 
     def __init__(
@@ -119,7 +126,7 @@ class QMIXRoundController(RoundController):
         agent_names: Sequence[str],
         train: bool = False,
         epsilon: float = 0.0,
-        score_fn: Optional[Callable] = None,
+        evaluator=None,
         length_goal: int = 25000,
         length_sigma: int = 8500,
     ) -> None:
@@ -133,13 +140,22 @@ class QMIXRoundController(RoundController):
         self.acting_agents = [a for a in self.agent_names if a != "Collector"]
         self.train = train
         self.epsilon = epsilon
-        self.score_fn = score_fn
+        self.evaluator = evaluator
         self.length_goal = length_goal
         self.length_sigma = length_sigma
 
         self.hidden: Optional[torch.Tensor] = None
         self.episode = Episode()
         self.judge_failures = 0
+        self.last_chunk_score = None   # latest ChunkScore (runner stats/log)
+        self.macro_score = None        # terminal MacroScore (runner stats/log)
+        self._reward_cfg = dict(get_config().get("reward", {}) or {})
+        # Length-shaping baseline, taken at construction (plan 2.5): the first
+        # event's delta is measured from the episode's starting length.
+        self._prev_length_gauss = length_gaussian(
+            len(ReportState.instance().content), length_goal, length_sigma,
+        )
+        self._task = ""
         self._step_buffer: List[EpisodeStep] = []
         self._pending: Optional[EpisodeStep] = None
         self._pending_tokens_before = 0.0
@@ -152,6 +168,7 @@ class QMIXRoundController(RoundController):
 
     async def round_plan(self, phase, round_idx, topology, nodes, task_input) -> RoundPlan:
         task = str((task_input or {}).get("task", ""))
+        self._task = task or self._task  # episode task, used by the judges
         obs = build_observations(nodes, task)
         adj = build_adj(nodes)
 
@@ -218,7 +235,7 @@ class QMIXRoundController(RoundController):
             await self._reward_event()
 
     async def on_run_end(self) -> None:
-        """Flush buffered steps at reward 0 and mark the episode done.
+        """Flush leftovers at 0, add the terminal macro reward, mark done.
 
         Idempotent: the runner also calls this from its finally-path so an
         aborted episode (e.g. NoCorpusCoverageError) still yields a
@@ -231,54 +248,105 @@ class QMIXRoundController(RoundController):
             self._step_buffer.append(self._pending)
             self._pending = None
         for step in self._step_buffer:
-            step.team_reward = 0.0
-            self.episode.add_step(step)
+            self._finalize_step(step, 0.0)
         self._step_buffer = []
+
+        # Terminal macro reward (TD1): one whole-report judge call, added to
+        # the final step — TD bootstrapping propagates it backward.
+        report = ReportState.instance().content
+        if self.train and self.evaluator is not None and report.strip() \
+                and self.episode.steps:
+            try:
+                macro = await self.evaluator.score_report(
+                    task=self._task,
+                    outline=list(ReportState.instance().planned_sections),
+                    report=report,
+                )
+            except Exception as exc:
+                macro = None
+                logger.warning(f"Evaluator raised during score_report: {exc}")
+            if macro is None:
+                self.judge_failures += 1
+                logger.warning("Terminal macro judge failed — no terminal reward.")
+            else:
+                self.macro_score = macro
+                self.episode.steps[-1].team_reward += compose_terminal_reward(
+                    macro.score, self._reward_cfg,
+                )
+                logger.info(
+                    f"Terminal macro: {macro.score:.3f} added to the final step."
+                )
+
         if self.episode.steps:
             self.episode.steps[-1].done = True
 
     # ------------------------------------------------------------------
-    # Reward event (Stage 4.4)
+    # Reward event (reward v2 — plan 2.5)
     # ------------------------------------------------------------------
 
-    def _length_score(self) -> float:
-        """Gaussian length score over the current report length (env-side)."""
-        length = len(ReportState.instance().content)
-        return float(np.exp(-0.5 * ((length - self.length_goal) / self.length_sigma) ** 2))
+    def _finalize_step(self, step: EpisodeStep, base_reward: float) -> None:
+        """Record a step with its reward minus the (flag-gated) token cost."""
+        step.team_reward = base_reward - token_penalty(
+            step.token_usage, self._reward_cfg,
+        )
+        self.episode.add_step(step)
 
     async def _reward_event(self) -> None:
-        """Score the report, spread the delta reward over buffered steps."""
-        if self.score_fn is None:
+        """Score the appended section; the reward lands on the EVENT STEP only.
+
+        OD-A: the most recent recorded step (the one whose round led to the
+        write) carries the composed reward; earlier buffered steps flush at 0
+        and TD bootstrapping propagates the credit backward. A judge failure
+        skips the event — buffered steps stay for the next one (plan 1.3).
+        """
+        if self.evaluator is None:
             # Recording without scoring (offline dry runs): steps stay in the
             # buffer and flush at reward 0 on run end.
             return
-        # Judge failures skip the event instead of scoring 0 (plan 1.3): the
-        # buffered steps stay for the next event; a parse/transport hiccup
-        # must never enter the score history (defect A0.3).
+        if not self._step_buffer:
+            logger.warning(
+                "Reward event with an empty step buffer — skipped "
+                "(no judge call made)."
+            )
+            return
+
+        rs = ReportState.instance()
+        section = rs.sections[-1] if rs.sections else None
+        chunk = section["content"] if section else (
+            rs.additions[-1] if rs.additions else rs.content
+        )
+        sources = list(section.get("sources") or []) if section else []
         try:
-            new_score = await self.score_fn()
+            chunk_score = await self.evaluator.score_chunk(
+                chunk=chunk, sources=sources, task=self._task,
+                context=rs.progress,
+            )
         except Exception as exc:
+            chunk_score = None
+            logger.warning(f"Evaluator raised during score_chunk: {exc}")
+        if chunk_score is None:
             self.judge_failures += 1
             logger.warning(
                 f"Judge failure #{self.judge_failures} — reward event skipped, "
                 f"{len(self._step_buffer)} buffered step(s) kept for the next "
-                f"event. ({exc})"
+                f"event."
             )
             return
-        Score.instance().update(new_score)
-        LengthGoal.instance().update(self._length_score())
-        reward = self.trainer.compute_reward(
-            Score.instance().get_delta(), LengthGoal.instance().get_delta()
+
+        gauss = length_gaussian(len(rs.content), self.length_goal, self.length_sigma)
+        reward = compose_event_reward(
+            chunk_score.score, gauss - self._prev_length_gauss, self._reward_cfg,
         )
-        if not self._step_buffer:
-            logger.warning("Reward event with an empty step buffer — dropped.")
-            return
-        share = reward / len(self._step_buffer)
-        for step in self._step_buffer:
-            step.team_reward = share
-            self.episode.add_step(step)
+        self._prev_length_gauss = gauss
+        self.last_chunk_score = chunk_score
+
+        *earlier, event_step = self._step_buffer
+        for step in earlier:
+            self._finalize_step(step, 0.0)
+        self._finalize_step(event_step, reward)
         self._step_buffer = []
         logger.info(
-            f"Reward event: reward={reward:.4f} spread over "
-            f"{self.episode.length} recorded step(s) so far."
+            f"Reward event: chunk={chunk_score.score:.3f} "
+            f"(grounding={chunk_score.grounding_ratio}) reward={reward:.4f} "
+            f"on the event step; {len(earlier)} earlier step(s) flushed at 0."
         )
