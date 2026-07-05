@@ -242,8 +242,10 @@ def test_stage1_2_judge_discipline():
         asyncio.run(evaluator.score_report(task="T", outline=["A"], report="## A\n\nBody."))
     except ImportError:
         import experiments.eval as eval_mod
-        original = eval_mod.get_llm
-        eval_mod.get_llm = lambda *a, **k: stub
+        if not hasattr(eval_mod, "_judge_llm"):
+            raise Pending("no _judge_llm seam yet")
+        original = eval_mod._judge_llm
+        eval_mod._judge_llm = lambda *a, **k: stub
         try:
             ReportState.instance().append("## A\n\nBody.", "progress")
             kwargs = {}
@@ -251,7 +253,7 @@ def test_stage1_2_judge_discipline():
                 kwargs["task"] = "T"
             asyncio.run(eval_mod.report_score(**kwargs))
         finally:
-            eval_mod.get_llm = original
+            eval_mod._judge_llm = original
             _reset_state()
 
     assert stub.calls, "no judge call captured"
@@ -372,6 +374,30 @@ def test_stage1_3_parse_failure_skips():
     assert result["logical_soundness"] == 4
     assert result["verifiability_score"] == 5, "score must be clamped to the schema max"
     assert result["hallucination_flag"] is False
+
+    # Field-completion loop: Ollama's grammar does not enforce `required`
+    # (live-observed reasoning-only reply, done_reason=stop) — a partial reply
+    # must be KEPT and the follow-up must ask only for the missing fields.
+    reasoning_only = json.dumps({"local_audit_notes": "solid chunk"})
+    scores_only = json.dumps({
+        "logical_soundness": 4, "verifiability_score": 4,
+        "technical_precision": 4, "info_density": 4,
+        "hallucination_flag": False,
+    })
+    stub = _CaptureLLM(responses=[reasoning_only, scores_only])
+    result = asyncio.run(judge_call(stub, [], micro_schema, required))
+    if len(stub.calls) != 2 or result.get("logical_soundness") != 4:
+        raise Pending("judge call does not complete partial replies yet")
+    assert result["local_audit_notes"] == "solid chunk", \
+        "fields from the partial reply must be kept"
+    follow_up_schema = stub.calls[1]["schema"]
+    assert "local_audit_notes" not in follow_up_schema.get("properties", {}), \
+        "follow-up must ask only for the MISSING fields"
+    assert stub.calls[1]["temperature"] == 0.0, \
+        "a productive attempt is followed at temperature 0 (progress was made)"
+    follow_up_text = str(stub.calls[1]["messages"][-1])
+    assert "solid chunk" in follow_up_text, \
+        "the already-provided reasoning must be fed back as context"
 
     # Unusable replies: retry (resampled!), then raise — never score a
     # malformed reply. At temperature 0 an identical re-ask would just

@@ -65,6 +65,12 @@ reward:
     temperature: 0.0  # judges must be deterministic — the reward is not a sample
     max_tokens: 3072  # headroom: replies truncated mid-notes are unusable (reason-first)
     retries: 2        # re-asks on unusable replies (resampled at temp>=0.35), then the event is skipped
+    # Judge calls use Ollama's NATIVE /api/chat structured outputs (grammar-
+    # constrained decoding; the OpenAI-compat json_schema is ignored by some
+    # Ollama versions). num_ctx must fit the macro judge's prompt — the FULL
+    # report plus instructions (10-15k tokens for a long document). Lower it
+    # if VRAM is tight; Ollama silently truncates the prompt when it overflows.
+    num_ctx: 32768
 
 rag:
   # Reranking mode applied after RRF fusion.

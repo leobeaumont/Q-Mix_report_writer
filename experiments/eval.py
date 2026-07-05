@@ -1,9 +1,13 @@
+import json
 from typing import Optional
 
+import aiohttp
 import numpy as np
 
-from qmix_report_writer.utils.globals import ReportState, Score
-from qmix_report_writer.utils.config import get_config, get_llm
+from qmix_report_writer.utils.globals import (
+    CompletionTokens, PromptTokens, ReportState, Score,
+)
+from qmix_report_writer.utils.config import get_config, get_llm_config
 from qmix_report_writer.utils.utils import safe_json_parse
 from qmix_report_writer.prompt.prompt_set_registry import PromptSetRegistry
 
@@ -25,12 +29,71 @@ def _judge_cfg() -> dict:
     return (get_config().get("reward", {}) or {}).get("judge", {}) or {}
 
 
+class _NativeJudgeLLM:
+    """Judge calls through Ollama's NATIVE /api/chat structured outputs.
+
+    The OpenAI-compat /v1/chat/completions path ignores `response_format:
+    json_schema` on the deployed Ollama (live-observed: arrays for strings,
+    raw markdown, XML tags) AND silently truncates prompts to the model's
+    default num_ctx (4096) — the macro judge's prompt is 10-15k tokens, so
+    the system prompt with all scoring instructions was being dropped.
+    The native API fixes both: `format` = grammar-constrained decoding
+    (malformed JSON is impossible), `options.num_ctx` = explicit context.
+    """
+
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+
+    def _base_url(self) -> str:
+        providers = get_llm_config().get("providers", {}) or {}
+        return (providers.get("ollama", {}) or {}).get(
+            "base_url", "http://localhost:11434"
+        ).rstrip("/")
+
+    async def agen(self, messages, max_tokens=None, temperature=None,
+                   response_schema=None, **_):
+        cfg = _judge_cfg()
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                m if isinstance(m, dict) else {"role": m.role, "content": m.content}
+                for m in messages
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.0 if temperature is None else float(temperature),
+                "num_predict": int(max_tokens or cfg.get("max_tokens", 3072)),
+                "num_ctx": int(cfg.get("num_ctx", 32768)),
+            },
+        }
+        if response_schema:
+            payload["format"] = response_schema
+
+        timeout = aiohttp.ClientTimeout(total=600, connect=60, sock_read=600)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{self._base_url()}/api/chat",
+                                    json=payload) as response:
+                data = await response.json()
+                if "message" not in data:
+                    raise JudgeError(
+                        f"native judge call failed: {str(data)[:200]}"
+                    )
+                # Token accounting parity with achat_ollama.
+                PromptTokens.instance().value += data.get("prompt_eval_count", 0)
+                CompletionTokens.instance().value += data.get("eval_count", 0)
+                return data["message"].get("content") or ""
+
+
 def _judge_llm():
     """The judge LLM — reward.judge.model, falling back to the pipeline default.
 
-    Deliberately independent of the actors' --llm flag (plan 1.2).
+    Deliberately independent of the actors' --llm flag (plan 1.2), and served
+    through the native structured-output endpoint (see _NativeJudgeLLM).
     """
-    return get_llm(_judge_cfg().get("model") or None)
+    model = _judge_cfg().get("model") or get_llm_config().get(
+        "default_model", "qwen3:8b"
+    )
+    return _NativeJudgeLLM(model)
 
 
 def _conform_to_schema(parsed, schema):
@@ -77,33 +140,74 @@ def _conform_to_schema(parsed, schema):
     return out
 
 
-async def _judge_call(llm, messages, schema, required_keys):
-    """One judge call: temperature 0, capped tokens, retry-then-raise parsing.
+def _sub_schema(schema, keys):
+    """The schema restricted to `keys` (for field-completion follow-ups)."""
+    props = schema.get("properties", {})
+    return {
+        "type": "object",
+        "properties": {k: props[k] for k in keys if k in props},
+        "required": [k for k in keys if k in props],
+        "additionalProperties": False,
+    }
 
-    A reply is usable when it parses, every value conforms to the schema's
-    types (coerced where safe), and all required keys are present.
+
+async def _judge_call(llm, messages, schema, required_keys):
+    """Judge call as a FIELD-COMPLETION loop: temperature 0, capped tokens.
+
+    Ollama's grammar-constrained decoding does not enforce `required` — the
+    model may close the object after the first field (live-observed: a clean
+    reasoning-only reply, done_reason=stop). So instead of discarding partial
+    replies, every attempt KEEPS the conformed fields it got and re-asks only
+    for the missing ones (after a reasoning-only reply that is a scores-only
+    sub-schema — reason-then-score preserved, the reasoning is fed back as
+    context). An attempt that makes no progress is resampled at temp >= 0.35;
+    re-asking an identical prompt at temperature 0 would deterministically
+    reproduce the same reply.
     """
     cfg = _judge_cfg()
     temperature = float(cfg.get("temperature", 0.0))
     max_tokens = int(cfg.get("max_tokens", 2048))
     retries = int(cfg.get("retries", 1))
 
+    all_keys = list(schema.get("properties", {}).keys())
+    merged = {}
+    made_progress = True
     last = ""
     for attempt in range(retries + 1):
-        # Retries must RESAMPLE: at temperature 0 an identical re-ask would
-        # deterministically reproduce the same malformed reply (seen live).
-        attempt_temperature = temperature if attempt == 0 else max(temperature, 0.35)
+        missing = [k for k in all_keys if k not in merged]
+        attempt_messages = list(messages)
+        if merged:
+            attempt_messages.append({
+                "role": "user",
+                "content": (
+                    "Your previous reply was incomplete. It already provided:\n"
+                    + json.dumps(merged)
+                    + "\nNow output ONLY the missing fields as a JSON object: "
+                    + ", ".join(missing)
+                ),
+            })
+        attempt_temperature = (
+            temperature if (attempt == 0 or made_progress)
+            else max(temperature, 0.35)
+        )
         last = await llm.agen(
-            messages,
+            attempt_messages,
             max_tokens=max_tokens,
             temperature=attempt_temperature,
-            response_schema=schema,
+            response_schema=_sub_schema(schema, missing) if merged else schema,
         )
         conformed = _conform_to_schema(safe_json_parse(last), schema)
-        if conformed is not None and all(k in conformed for k in required_keys):
-            return conformed
+        made_progress = False
+        if conformed:
+            for key, val in conformed.items():
+                if key not in merged:
+                    merged[key] = val
+                    made_progress = True
+        if all(k in merged for k in required_keys):
+            return merged
     raise JudgeError(
-        f"unusable judge reply after {retries + 1} attempt(s): {str(last)[:120]}..."
+        f"incomplete judge reply after {retries + 1} attempt(s) "
+        f"(got {sorted(merged.keys())}, last raw: {str(last)[:120]}...)"
     )
 
 
