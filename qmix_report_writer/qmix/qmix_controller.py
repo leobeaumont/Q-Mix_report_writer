@@ -148,6 +148,7 @@ class QMIXRoundController(RoundController):
         self.episode = Episode()
         self.judge_failures = 0
         self.last_chunk_score = None   # latest ChunkScore (runner stats/log)
+        self.chunk_scores = []         # every ChunkScore this episode (JSONL, plan 4.3)
         self.macro_score = None        # terminal MacroScore (runner stats/log)
         self._reward_cfg = dict(get_config().get("reward", {}) or {})
         # Length-shaping baseline, taken at construction (plan 2.5): the first
@@ -338,6 +339,7 @@ class QMIXRoundController(RoundController):
         )
         self._prev_length_gauss = gauss
         self.last_chunk_score = chunk_score
+        self.chunk_scores.append(chunk_score)
 
         *earlier, event_step = self._step_buffer
         for step in earlier:

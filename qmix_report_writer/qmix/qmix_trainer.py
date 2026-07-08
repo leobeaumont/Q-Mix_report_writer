@@ -157,7 +157,9 @@ class QMIXTrainer:
         L(θ) = E[(y^tot - Q_tot(τ, u; θ))^2]
         y^tot = R̄ + γ * (1 - done) * Q_tot(τ', argmax_{u' valid} Q(τ', u'; θ); θ^-)
         """
-        if len(self.replay_buffer) < self.batch_size:
+        # Warmup is the RUNNER's policy (qmix.training.min_buffer_episodes,
+        # plan 4.1); below batch_size the buffer samples with replacement.
+        if len(self.replay_buffer) == 0:
             return None
 
         batch: EpisodeBatch = self.replay_buffer.sample(self.batch_size)
@@ -266,7 +268,15 @@ class QMIXTrainer:
             done=batch.done.to(self.device),
         )
 
-    def save(self, path: str):
+    def save(self, path: str, epsilon: Optional[float] = None,
+             episode_idx: Optional[int] = None,
+             best_eval: Optional[float] = None,
+             config_echo: Optional[dict] = None):
+        """Checkpoint v2 (plan 4.5): networks + optimizer + run metadata.
+
+        The metadata (ε, episode counter, best eval score, config echo) makes
+        --resume actually resume; all optional so plain model saves work.
+        """
         import os
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         torch.save({
@@ -274,15 +284,25 @@ class QMIXTrainer:
             "mixing_network": self.mixing_network.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "training_step": self.training_step,
+            "epsilon": epsilon,
+            "episode_idx": episode_idx,
+            "best_eval": best_eval,
+            "config_echo": config_echo,
         }, path)
         logger.info(f"Saved QMIX checkpoint to {path}")
 
-    def load(self, path: str):
-        checkpoint = torch.load(path, map_location=self.device)
+    def load(self, path: str) -> dict:
+        """Restore networks/optimizer; returns the checkpoint's run metadata."""
+        # weights_only=False: v2 checkpoints carry a config-echo dict.
+        checkpoint = torch.load(path, map_location=self.device,
+                                weights_only=False)
         self.agent_network.load_state_dict(checkpoint["agent_network"])
         self.mixing_network.load_state_dict(checkpoint["mixing_network"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.training_step = checkpoint["training_step"]
         self._update_targets()
         logger.info(f"Loaded QMIX checkpoint from {path} (step {self.training_step})")
+        return {key: checkpoint.get(key) for key in
+                ("epsilon", "episode_idx", "best_eval", "config_echo",
+                 "training_step")}
 

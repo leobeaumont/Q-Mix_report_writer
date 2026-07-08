@@ -16,9 +16,8 @@ The report-writing machinery — phases, section iteration, sentinel protocols, 
 1. **GNN message passing** — agents communicate through the chosen graph topology.
 2. **Per-agent Q-network** — GNN → GRU (temporal) → MLP (Q-values).
 3. **Monotonic mixing network** — $\frac{\partial Q_{tot}}{\partial Q_i} \geq 0$.
-4. **Reward** = $\Delta_{report\,score}\times w_{report} + \Delta_{token\,goal}\times w_{token}$ — the change in report score and in the Gaussian token-goal score since the previous report append. Reward events fire only when the report actually grows, spread over the rounds that produced the addition.
-
-> The training algorithm and the report-quality evaluator are slated for a separate rework; the pipeline integration around them (masks, reward trigger, observations) is current.
+4. **Reward (v2)** — per append event: $w_{quality}\cdot s_{chunk} + w_{length}\cdot \Delta gauss_{length}$, where $s_{chunk}$ is the appended section's own **grounded** judge score (audit rubric × hallucination flag × claim-grounding factor against the section's stored RAG sources); at run end a terminal macro judge scores the whole report once ($w_{macro}\cdot s_{macro}$, added to the final step). Reward events fire only when the report actually grows and land on the event step only — TD bootstrapping propagates the credit. A flag-gated token penalty ships disabled (`reward.token_weight: 0.0`).
+5. **Trainer** — masked **Double-DQN** targets (invalid actions never enter the argmax), terminal transitions included in the TD targets, batched (vectorized) forward passes, in-edge GNN aggregation.
 
 ## QMIX actions (v2)
 
@@ -94,13 +93,20 @@ python -m experiments.run_qmix_train --num-episodes 50 --trace
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--num-episodes N` | `qmix.training.num_episodes` (500) | Episodes to run; each writes one report (PLANNING→RESEARCH→DRAFTING only, no review/finalize). |
-| `--llm <model>` | config default | Generation model for the agents. |
-| `--save-path <path>` | `checkpoints/qmix_v2_<ts>.pt` | Checkpoint destination (best-reward + interval saves). |
-| `--resume <path>` | — | Continue training from an existing checkpoint. |
+| `--llm <model>` | config default | Generation model for the agents (the **judges** are configured separately under `reward.judge`). |
+| `--save-path <path>` | `checkpoints/qmix_v2_<ts>.pt` | Latest checkpoint (periodic + final; the replay buffer is saved alongside as `<path>.buffer.pt`). The best-eval model is written separately to `<path>_best.pt`. |
+| `--resume <path>` | — | Resume training: restores networks, optimizer, ε, episode counter, best score, and the replay buffer. |
 | `--device` | `cpu` | `cpu` or `cuda`. |
 | `--trace` | off | Save each episode's trace to `qmix_trace.json`. |
 
-> Learning is gradient-gated: `train_step` only runs once the replay buffer holds ≥ `batch_size` (32) episodes, so `loss=n/a` / `Steps: 0` on short runs is expected, not a bug. Reward, network hyperparameters, and the action masks are configured under `qmix:` / `reward:` in `configs/default.yaml`.
+Training-loop behavior (all knobs under `qmix.training:` in `configs/default.yaml`):
+
+- **Warmup + replay ratio** — gradient steps start once the buffer holds `min_buffer_episodes` (8) episodes, then `train_steps_per_episode` (4) steps run after every episode, so `loss=n/a` on the first few episodes is expected, not a bug.
+- **Greedy eval** — every `eval_interval` (25) episodes one ε=0 episode runs on a fixed anchor task, is scored but never buffered, and drives the best checkpoint (before the first eval, a moving average of training rewards stands in).
+- **JSONL run log** — every episode appends a record to `<output_root>/qmix_train_log.jsonl` with the full per-term reward decomposition (per-chunk judge scores, grounding ratios and claim verdict counts, macro breakdown, per-step rewards, losses of all gradient steps, judge failures, wall time, eval results); the first record echoes the config and seed.
+- **Seeding** — set `qmix.training.seed` for reproducible network init and sampling.
+
+Reward weights and judge settings (`reward:` — judge model, temperature 0, retries, context size), network hyperparameters, and the action masks are configured in `configs/default.yaml`.
 
 ### Step 4 — Generate with the trained policy
 
@@ -281,27 +287,15 @@ Technical changes:
 
 Agent-Q-Mix is trained on a set of problem solving database. To train the `Q-Mixer` they use the score based on the answers given by the model to each problem of the datasets. And a penalty is applied for token usage. This forces the model to be precise with few tokens.  
 
-In the `report writer` implementation, since the `Q-Mixer` is not used for problem solving, it can't be scored using answer `accuracy` anymore. On top of that, `report generation` is a longer process than `problem solving`. It means that it is possible and preferable to score the model while it is constructing the report, to help the model understand the quality of each of its decisions. This change is highly compatible with the new `append loop` architecture: every time content is added to the report with the `append` action, it is possible to score the quality of the addition and the token usage. The Q-Mixer reward can be computed mid-process using these scores. More precisely, the `variation of the scores` between the previous and the current state of the report gives a very good insight on how good the last addition was to the overall report. And the better the addition is, the better the reward will be.
+In the `report writer` implementation, since the `Q-Mixer` is not used for problem solving, it can't be scored using answer `accuracy` anymore. On top of that, `report generation` is a longer process than `problem solving`. It means that it is possible and preferable to score the model while it is constructing the report, to help the model understand the quality of each of its decisions. This change is highly compatible with the new `append loop` architecture: every time content is added to the report with the `append` action, the addition itself can be scored — the appended section is judged on its own merits against the RAG sources it was written from, and that grounded score (plus a length-shaping term) becomes the reward for the steps that produced it. A single whole-report judgment at the end of the episode rewards global coherence.
 
-Technical changes:
-- Changed reward to $\Delta_{report \, score} \times w_{report \, score} + \Delta_{token \, goal} \times w_{token \, goal}$.
-- Added an optional `JSON` schema format to the LLM handlers, that forces the LLM's output to a specific format.
-- Added a `Micro Scoring` and `Macro Scoring` LLM judges used during training to help improve the quality of the production. The `Micro Scoring` judge scores each chunk of the document. The `Macro Scoring` judge scores the whole document. 
-- `Micro Scoring` judge is responsible for: logic, verifiability, technical precision, information density and hallucination flagging.
-- `Macro Scoring` judge is responsible for: subject coverage, flow, structure, tone and avoiding repetition.
-- The reward is now computed after every `append` action, because the changes in the report cause changes in the report `score` and `token goal` completion.
-- All rounds between the previous `append` round and the current `append` round receive an even fraction of the reward. This is done to reward all the rounds that lead to a good `append` to the the report and not only the round where the `append` action occurs. The reward is shared between rounds to motivate the model to be efficient (i.e.: get to a high quality `append` action in as few rounds as possible).
-- Added a `Score` and `LengthGoal` singletons to track their current respective value, but also the previous one. This way a `get_delta()` method can be called on them to get the difference between their current and their last value.
-- Changed the training pipeline to compute the reward after each `append` action.
-- Added a `step buffer` to propagate the reward to all the rounds that lead to the `append` action. The reward is evenly spread between all actions to reward the whole process of creation. Any steps remaining in the buffer at the end of an episode (i.e. after the last `append`) are flushed to the episode with `team_reward = 0`.
-- Added a `length scorer` based on a Gausian curve centered at $\mu = 25000$ and $\sigma = 8500$ with a peak of height 1. The goal of 25000 character correspond to ~4500 words which is the average length of scientific documents. The value of $\sigma$ is set to 8500 to start giving a good reward signal at around 5000 characters.
-- Added a `report scorer` based on the 2 `LLM judges` described earlier.
-    - The `Macro` judge is prompted to analyze the whole report with only a prompt and the report as context.
-    - The `Micro` judge is prompted to analyze each chunk of the report individually. When the judge process a chunk he has access to: its prompt, global notes generated by the `Macro` judge, a summary of the report, notes from the `Micro` analysis of all previous chunks and the text of the current chunk.
-    - Each judge produces scores for each categories they are asked evaluate, with scores ranging from 0 to 5.
-    - The final score of the report is the average of all the `Macro` scores and all the `Micro` scores from each individual chunks.
-    - The final score is normalized between 0 and 1. To ensure it has the same scale as the `length score`.
-- To compute the `reward`, the evolution of the `length` and `report` scores is used. This ensure that an addition that increases significantly the global score is greatly rewarded. However is mediocre addition is not rewarded much and a bad addition can even be penalized.
+The reward system was rebuilt once real benchmark data existed (**reward v2**, module `qmix_report_writer/evaluation/`; the v1 running-average delta scorer measured 0.35 ranking accuracy — below chance — and was retired):
+
+- **Per-chunk grounded scoring** — every `append` fires one reward event scoring the appended section on its own (no running average): a **chunk audit** judge (logical soundness, verifiability, technical precision, info density, hallucination flag — 0–5 each, judged against the section's stored RAG sources) plus a **claim check** that extracts the section's factual claims and verdicts each one against those sources (`supported` / `unsupported` / `contradicted`). The chunk score is `rubric_mean × (0.5 if hallucination) × grounding_factor`, with the grounding factor `(n_supported + 0.5·n_unsupported) / n_claims` — contradiction hurts more than absence. Claim verdicts must cite an **evidence quote that actually occurs in the sources** (verified client-side); a fabricated quote downgrades the verdict.
+- **Terminal macro scoring** — ONE whole-report judge call at episode end (subject coverage vs the commissioned task and outline, flow, structure, tone, redundancy avoidance), added to the final step's reward. This replaced the v1 design where the macro judge re-read the whole growing report on every append (O(n²) tokens).
+- **Reward composition** — event reward `quality_weight·chunk_score + length_weight·Δlength_gauss` lands on the event step only (earlier buffered steps flush at 0; TD bootstrapping propagates credit — replaces v1's even spreading). The length term is a Gaussian centered at 25 000 chars (σ = 8 500). A token penalty (`token_weight·tokens/10k` per step) is implemented but ships disabled.
+- **Judge discipline** — judges run at temperature 0 on a dedicated model (`reward.judge.*`, independent of the actors' `--llm`), through Ollama's **native `/api/chat` structured outputs** (grammar-constrained decoding, explicit `num_ctx`). Judge calls are a **field-completion loop** (partial replies keep their fields; only missing ones are re-asked), replies are schema-conformed client-side, and a parse/transport failure **skips the reward event** (steps stay buffered) — a failure never becomes a score of 0.
+- **Evaluator benchmark** — `experiments/scorer_benchmark.py` measures the scorer itself against versioned real papers in `tests/test_documents/`: `rank` (ordered same-paper version pairs — v2 with derived subjects: **0.85** ranking accuracy vs 0.35 at baseline), `repeat` (noise floor — σ 0.0127 → 0.000), `corrupt` (off-topic / shuffled / perturbed-numbers probes), `ground` (claim-check health against supporting vs number-perturbed sources). `experiments/judge_smoke.py` is a ~1-minute pre-flight health check (transport + grounding probes) to run before any long training run.
 
 ### Adding tool usage
 

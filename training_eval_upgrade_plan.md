@@ -231,43 +231,43 @@
 
 ## Stage 4 — Training-loop engineering
 
-### 4.1 `[ ]` Replay ratio & warmup *(report B2.1)*
+### 4.1 `[x]` Replay ratio & warmup *(report B2.1)*
 - **What:** `qmix.training.train_steps_per_episode` (default 4) and `qmix.training.min_buffer_episodes` (default 8): after each episode, if buffer ≥ min, run k train_steps (batch = min(batch_size, len(buffer)), sampled with replacement below `batch_size`). Revisit `target_update_interval` default against the new gradient-step rate (note the chosen value here).
 - **Test:** acceptance `test_stage4_1_replay_ratio` (stub trainer counts train_step calls; warmup respected).
-- **Done note:** —
+- **Done note:** 2026-07-08 — both keys added and consumed by the runner loop (k steps once warmup met; losses collected per step for the JSONL). `ReplayBuffer.sample` draws with replacement when the buffer holds fewer than `batch_size` episodes; the trainer's own gate relaxed to buffer-non-empty (warmup is the runner's policy). **`target_update_interval` 200 → 100**: at 4 grad-steps/episode that refreshes the target every ~25 episodes (200 was tuned for 1 step/episode and would stretch to 50). Acceptance PASS.
 
-### 4.2 `[ ]` Eval protocol & best-checkpoint *(report B2.2)*
+### 4.2 `[x]` Eval protocol & best-checkpoint *(report B2.2)*
 - **What:** Every `qmix.training.eval_interval` episodes (default 25): one **greedy** episode (ε=0, D6 shape, scored by the evaluator, NOT pushed to the buffer); its score decomposition logged. `best checkpoint` = best eval score (fallback: moving average of last 5 training rewards until the first eval) — replaces the single-episode `best_reward` criterion.
 - **Test:** acceptance `test_stage4_2_eval_protocol` (stubbed runner: eval fires at the interval, greedy, not pushed; best-ckpt follows eval score).
-- **Done note:** —
+- **Done note:** 2026-07-08 — `_run_eval_episode` (ε=0, `train=True` so events fire, episode never pushed) on a FIXED anchor task (`tasks[0]`) so eval scores are comparable across the run; full decomposition returned and embedded in the episode's JSONL record. Best checkpoint follows the eval score once evals exist (fallback `train_ma5` before the first; a restored `best_eval` on resume counts as eval — metrics never mix) and is written to **`<save_path>_best.pt`**, separate from the periodic/latest `<save_path>` (which alone carries the buffer sidecar) — one file would let a periodic save overwrite the best model. `eval_interval: 0` disables. Acceptance PASS; whole loop exercised offline via a stub-graph run (3 episodes + resume).
 
-### 4.3 `[ ]` JSONL run log *(report B2.3)*
+### 4.3 `[x]` JSONL run log *(report B2.3)*
 - **What:** Append one record per episode to `<output_root>/qmix_train_log.jsonl`: episode idx, task, ε, steps, tokens, per-term reward decomposition (chunk scores, grounding ratios, macro breakdown, length/token terms), judge failures/retries, loss stats (all k steps), wall time, eval results when present; header record with config echo + seed.
 - **Test:** acceptance `test_stage4_3_jsonl_log` (records written, required keys present, decomposition fields populated from stub evaluator dataclasses).
-- **Done note:** —
+- **Done note:** 2026-07-08 — `TRAIN_LOG_FILENAME`/`_append_train_log`; header = timestamp/seed/episodes/llm/agents/resume/config echo (qmix + reward). Episode record = task/ε(as used)/steps/tokens/`step_rewards`/`report_chars` (length term reconstructable)/full ChunkScore decomposition (rubric fields, grounding ratio, claim s-u-c counts, halluc)/macro breakdown/judge_failures/all k losses/training_step/buffer size/wall time/eval block/best metric. The controller now accumulates `chunk_scores` per episode (additive attr — was last-only). Token term lives inside step_rewards (flag-gated). Acceptance PASS. Dead `qmix.training.log_interval` key removed (no reader existed).
 
-### 4.4 `[ ]` Seeding *(report B2.4)*
+### 4.4 `[x]` Seeding *(report B2.4)*
 - **What:** `qmix.training.seed` (default unset = current behavior) → seeds `torch`, `numpy`, `random` at run start; logged in the JSONL header.
 - **Test:** acceptance `test_stage4_4_seeding` (same seed → identical network init; logged).
-- **Done note:** —
+- **Done note:** 2026-07-08 — `_seed_everything` (torch/numpy/random) fired before `build_trainer` when `qmix.training.seed` is set; seed echoed in the JSONL header. Acceptance PASS.
 
-### 4.5 `[ ]` Checkpoint v2 + buffer persistence *(report B2.5, OD-C)*
+### 4.5 `[x]` Checkpoint v2 + buffer persistence *(report B2.5, OD-C)*
 - **What:** Checkpoints add `epsilon`, `episode_idx`, `best_eval`, config echo. `qmix.training.persist_buffer` (default true): buffer episodes saved next to the checkpoint (`<save_path>.buffer.pt`); `--resume` restores buffer + ε + counters so resume actually resumes.
 - **Test:** acceptance `test_stage4_5_checkpoint_v2` (save→load round-trip restores ε/counters/buffer length); guard `test_trainer_checkpoint_roundtrip` updated additively in this commit if keys changed.
-- **Done note:** —
+- **Done note:** 2026-07-08 — `QMIXTrainer.save(path, epsilon=, episode_idx=, best_eval=, config_echo=)` (all optional → plain saves unchanged; checkpoint guard green untouched); `load` now RETURNS the metadata dict (`weights_only=False` for the config echo — torch 2.11 defaults True). `ReplayBuffer.save/load` (torch-pickled episodes, `weights_only=False`, capacity stays the loader's). Runner `--resume`: restores ε, `start_episode`, `best_eval`, and the buffer sidecar when `persist_buffer` (episode loop ranges `start_episode..num_episodes`; header logs both). Offline stub-graph run verified resume restarts at the right episode with all files present. Acceptance PASS.
 
 ---
 
 ## Stage 5 — Docs, config, sync
 
-### 5.1 `[ ]` README update
+### 5.1 `[x]` README update
 - **What:** Rewrite the training/evaluation sections: reward v2 (per-chunk + terminal macro, grounding, token flag), judge config, new training-loop knobs, benchmark harness usage; remove the old scorer description.
-- **Done note:** —
+- **Done note:** 2026-07-08 — learner summary rewritten (reward v2 formula + trainer item: masked Double-DQN, terminal transitions, vectorized, in-edge GNN; "slated for rework" callout removed). Step-3 tutorial: checkpoint table (latest + `_best.pt` + buffer sidecar, full resume) + a training-loop behavior block (warmup/replay ratio, greedy eval, JSONL log, seeding). The v1 scorer description in "From post-process to real time reward" replaced by the v2 design (grounded chunk audit + claim check with evidence verification, terminal macro, event-step placement, judge discipline/native transport, benchmark results 0.35→0.85).
 
-### 5.2 `[ ]` Config finalization
+### 5.2 `[x]` Config finalization
 - **What:** `reward:` + `qmix.training.*` reflect exactly what the code reads; no dead keys (previous project's hygiene standard); defaults documented inline.
 - **Test:** acceptance `test_stage5_2_config_clean` (every documented key read; no stale keys).
-- **Done note:** —
+- **Done note:** 2026-07-08 — grep sweep over all `*.get("…")` config reads confirms the bijection: every `reward:`/`qmix:` key has a reader (weights, length goal/sigma, judge model/temperature/max_tokens/retries/num_ctx; all trainer hyperparams; all 9 `training` keys) and every read key exists with an inline-documented default. Dead `training.log_interval` was removed in 4.3; `target_update_interval` re-documented with the 4.1 rationale. Acceptance PASS (flipped with the Stage-4 config additions).
 
 ### 5.3 `[ ]` **LIVE** End-to-end smoke (2 episodes)
 - **What:** `run_qmix_train --num-episodes 2 --trace` on the live model (checkpoint-4.8 protocol): no crashes, reward events fire with the new decomposition, JSONL written, terminal macro present, judge failures handled if any occur. Record findings here.
@@ -293,6 +293,6 @@ None — TD1–TD4 and OD-A–D are all settled (see decision log). New decision
 | 1 — Judge de-noising | 4 | 4 |
 | 2 — Evaluation module & reward v2 | 10 | 10 |
 | 3 — Trainer correctness | 7 | 7 |
-| 4 — Loop engineering | 5 | 0 |
-| 5 — Docs & sync | 4 | 0 |
-| **Total** | **33** | **24** |
+| 4 — Loop engineering | 5 | 5 |
+| 5 — Docs & sync | 4 | 2 |
+| **Total** | **33** | **31** |

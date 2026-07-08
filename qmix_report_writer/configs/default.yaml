@@ -33,7 +33,10 @@ qmix:
   mixing_hidden_dim: 64
   lr: 5e-4
   gamma: 0.99
-  target_update_interval: 200
+  # Gradient steps between hard target updates. Revisited for plan 4.1: at
+  # train_steps_per_episode=4 this refreshes the target every ~25 episodes
+  # (the old 200 was tuned for 1 step/episode and would stretch to 50).
+  target_update_interval: 100
   buffer_capacity: 5000
   batch_size: 32
   grad_clip: 10.0
@@ -41,8 +44,13 @@ qmix:
     num_episodes: 500
     epsilon_start: 1.0
     epsilon_end: 0.05
-    log_interval: 10
     save_interval: 50
+    # Training-loop engineering (plan 4.1/4.2/4.4/4.5):
+    train_steps_per_episode: 4   # gradient steps after each episode (replay ratio)
+    min_buffer_episodes: 8       # warmup: no training below this many episodes
+    eval_interval: 25            # greedy eval episode (eps=0, not buffered) every N episodes; 0 disables
+    seed:                        # null -> unseeded; set for reproducible runs (torch/numpy/random)
+    persist_buffer: true         # save the replay buffer next to checkpoints; --resume reloads it
   obs:
     # Observation text features (task + progress summary). By default they are
     # cheap byte-hashes. Set use_embeddings: true to replace them with

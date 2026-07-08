@@ -110,7 +110,12 @@ class ReplayBuffer:
         self.buffer.append(episode)
 
     def sample(self, batch_size: int) -> EpisodeBatch:
-        indices = np.random.choice(len(self.buffer), size=min(batch_size, len(self.buffer)), replace=False)
+        # Below batch_size the batch is len(buffer) episodes drawn WITH
+        # replacement (plan 4.1: training starts at min_buffer_episodes,
+        # before the buffer can fill a whole batch).
+        size = min(batch_size, len(self.buffer))
+        indices = np.random.choice(len(self.buffer), size=size,
+                                   replace=len(self.buffer) < batch_size)
         episodes = [self.buffer[i] for i in indices]
 
         max_len = max(ep.length for ep in episodes)
@@ -160,6 +165,17 @@ class ReplayBuffer:
             mask=mask_batch,
             done=done_batch,
         )
+
+    def save(self, path: str) -> None:
+        """Persist the stored episodes next to a checkpoint (plan 4.5, OD-C)."""
+        torch.save({"episodes": list(self.buffer), "capacity": self.capacity}, path)
+
+    def load(self, path: str) -> None:
+        """Restore episodes saved by `save` (capacity stays this buffer's)."""
+        # weights_only=False: episodes are pickled Episode/EpisodeStep objects,
+        # not tensors — the file is our own checkpoint sidecar.
+        data = torch.load(path, map_location="cpu", weights_only=False)
+        self.buffer = deque(data["episodes"], maxlen=self.capacity)
 
     def __len__(self):
         return len(self.buffer)
