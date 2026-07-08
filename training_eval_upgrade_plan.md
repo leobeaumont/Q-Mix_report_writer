@@ -172,7 +172,7 @@
 - **Amendment (2026-07-08, after the first live smoke stayed inert):** raw-reply diagnosis (scratchpad spy on `llm.agen`) found the ACTUAL mechanism — not conservatism but **shape**: the judge returned valid JSON with **parallel string arrays** (`{"claims": [...], "verdicts": [...]}`) instead of the schema's array of objects. So Ollama's grammar `format` is NOT enforced on NESTED schemas (extra key + wrong item types got through); `_compose_chunk_score` silently dropped the non-dict items (0 claims counted) and the re-ask guard was blind because the list was non-empty. Three fixes: (1) **`_normalize_claims`** conformance layer — accepts proper objects, parallel arrays, and bare strings with a trailing verdict; verdicts cleaned (`"Supported."`→`supported`); never guesses a verdict; used by both the composer and the guard (guard now keys on *usable* claims, catching non-empty-but-unusable replies too). (2) **Output-shape block in `CLAIM_CHECK_PROMPT`** with a one-line example — live effect: the model emits the correct object shape first-try (normalization stays as belt-and-braces). (3) **Verdict rubric sharpened** — first green-shape run verdicted a numeric disagreement (source 3.51 vs chunk 9.81) as `unsupported`; rubric now states "a different value for the same quantity is `contradicted`, never `unsupported`". `test_evaluation.py` 9→12 (parallel arrays normalized without re-ask; trailing-verdict strings; all-unusable items trigger the re-ask).
 - **LIVE verification (2026-07-08): smoke GREEN** — after the full hardening (incl. the 2.10-round evidence machinery): matching source 2/2 supported, grounding 1.0, score 1.0000; contradicting source 2/2 **contradicted**, grounding 0.0, halluc flagged, score 0.0000 (**drop +1.0000**, maximal). Claim extraction engages; TD3 grounding operational in the paraphrase regime training runs in.
 
-### 2.10 `[~]` Re-measure discrimination once grounding engages (benchmark fidelity for grounding)
+### 2.10 `[x]` Re-measure discrimination once grounding engages (benchmark fidelity for grounding)
 - **Problem:** Same-revision discrimination was poor in 2.8 (ACCADA all within 0.425–0.447; Towards *descended* v01→v20 with the 3-chunk v01 scoring highest). This is **confounded**: the differences between paper revisions are largely factual/evidential, exactly the axis grounding scores — and grounding was inert (2.9) and source-less here. It cannot be judged a real evaluator defect until grounding actually fires. Also, the benchmark currently cannot test the grounded path at all (no sources in the corpus).
 - **Possible fixes:**
   - Add a **grounding probe** to `scorer_benchmark.py`: synthesize sources for a document (e.g. take each chunk's own sentences as "supporting" sources, and a numbers-perturbed copy as "contradicting"), so the claim-check + grounding factor are exercised and measurable offline-of-corpus.
@@ -186,46 +186,46 @@
   3. *Probe run 3* (sentence-reversed sources — a verbatim self-source is an unrealistic regime; training sources are paraphrases, never byte-copies): evidence STILL copied from the claim. Conclusion: prompt wording cannot make this model digit-compare near-twin sentence pairs — behavioral floor.
   4. *Fix that landed:* **client-side evidence verification** (`_verify_evidence` + NFKD `_norm_for_match`): `supported`/`contradicted` verdicts whose evidence quote does NOT occur in the sources (case/whitespace/punctuation/ligature-insensitive, digits preserved) are downgraded to `unsupported` (original kept as `verdict_raw`). Deterministic, offline-tested (`test_evaluation.py` 12→13 incl. `test_fabricated_evidence_downgraded`). *Probe run 4 (final):* supporting passes keep 58 supported vs 10 downgraded (mean grounding 0.834); perturbed passes get **25 fabricated supports caught** (grounding 1.0→0.5/0.2 on the numeric chunks); the 39 kept are digit-free qualitative claims the perturbed source legitimately still contains. Results: `benchmark_ground_v2_20260708_{103349,104628,110423,111326}`.
 - **Residual (accepted, documented):** on digit-twin sentence pairs the judge emits `supported` (now → `unsupported`, factor 0.5) rather than `contradicted` (factor 0) — `contradiction_detected_fraction` stays 0.0 on this corpus probe. In the PARAPHRASE regime (smoke; = training conditions, where sections restate RAG excerpts) contradiction detection is perfect (2/2, drop +1.0). Pushing further would overfit judge prompts to an adversarial artifact; the audit call independently catches blatant numeric corruption regardless (halluc flag, perturbed-pass scores 0.09–0.35). Revisit only if training logs show grounded scores not separating factually-wrong sections.
-- **REMAINING (user):** the long discrimination re-read — `rank --derive-subject` (optionally `--self-sources`) vs 2.8's 0.40; record here, then close 2.10.
+- **LIVE discrimination re-read (user, 2026-07-08, `benchmark_rank_v2_20260708_114108`): ranking accuracy 0.850** (17/20 pairs) with `--derive-subject` — the project's best (baseline 0.35 → Stage 1 0.80 → 2.8 subject-blind 0.40 → **0.85**). Qualitatively correct at last: ACCADA_final ranks FIRST in its family (baseline had it dead last at 0.013) and Towards v22 first in its; the Stage-1 middle-band inversions are gone except v06>v18. All 3 remaining inversions are ADJACENT-revision pairs (v012/v019 Δ0.007, v026/v027 Δ0.009, v06/v18 Δ0.014) — noise-level, no structural pattern. The 2.8 collapse is confirmed a subject-blindness artifact, not an evaluator defect. **STAGE 2 COMPLETE (10/10). Part A (evaluator) done.**
 
 ---
 
 ## Stage 3 — Trainer correctness & Double-DQN (TD4, OD-B)
 
-### 3.1 `[ ]` Masks through the buffer *(report B0.1)*
+### 3.1 `[x]` Masks through the buffer *(report B0.1)*
 - **What:** `Episode.to_tensors()` stacks `EpisodeStep.mask` (steps with `mask=None` → all-valid); `EpisodeBatch` gains `avail_actions: (B, T, N−1, n_actions)` bool; padded slots all-valid (prevents −inf-everywhere rows). `train_step`: masked Q (−inf on invalid) for **both** the target max and the Double-DQN argmax (3.3).
 - **Test:** acceptance `test_stage3_1_masked_targets` (synthetic batch where an invalid action has the highest target Q → target must ignore it); guard `test_episode_mask_recorded` stays green.
-- **Done note:** —
+- **Done note:** 2026-07-08 — `to_tensors` stacks masks (None → all-valid, n_actions from any stored mask else `NUM_ACTIONS`); `EpisodeBatch.avail_actions` bool; `sample` initializes avail to all-True (pad slots included); `train_step` sets −inf at `~avail` before the (Double-DQN) argmax. Acceptance PASS; mask guard green.
 
-### 3.2 `[ ]` Terminal-transition fix *(report B0.2)*
+### 3.2 `[x]` Terminal-transition fix *(report B0.2)*
 - **What:** `ReplayBuffer.sample` pads to `max_len + 1` (PyMARL-style filled slot: obs/adj/state zero, avail all-valid, reward 0, done carried as 1 after episode end, timestep mask 0) so `targets[:, :-1]` covers every REAL transition including the terminal one of max-length episodes.
 - **Test:** acceptance `test_stage3_2_terminal_trained` (two-episode batch, equal max length, terminal reward ≠ 0 → appears in the TD targets / loss gradient).
-- **Done note:** —
+- **Done note:** 2026-07-08 — `T_pad = max_len + 1`; pad slot zero-filled, avail all-True, `done_batch[i, T:] = 1` (its target value is killed by `(1 − done)`), timestep mask 0. Acceptance PASS (shape probe + terminal-reward-reaches-loss probe).
 
-### 3.3 `[ ]` Double-DQN targets *(report B1.1)*
+### 3.3 `[x]` Double-DQN targets *(report B1.1)*
 - **What:** `a* = argmax_a Q_online(s', a)` (masked), `y = r + γ(1−done)·Q_target_tot(s', a*)` — the target-side max over `target_acting_q` is replaced by a gather at the online argmax before mixing.
 - **Test:** acceptance `test_stage3_3_double_dqn` (online and target nets forced to disagree → target uses online's argmax evaluated by target net, not target's own max).
-- **Done note:** —
+- **Done note:** 2026-07-08 — online `acting_q_values.detach()` masked to −inf at invalid → `argmax` → `target_acting_q.gather` → target mixer. Module/`train_step` docstrings updated to the Double-DQN target form. Acceptance PASS.
 
-### 3.4 `[ ]` Dropout removal *(report B0.3)*
+### 3.4 `[x]` Dropout removal *(report B0.3)*
 - **What:** Remove `Dropout` from `GNNMessagePassing` (keep LayerNorm); `select_actions` additionally wraps in `eval()`/restore (belt and braces for any future stochastic layer). Old checkpoints are invalid — none exist worth keeping (relaxed constraint).
 - **Test:** acceptance `test_stage3_4_no_dropout` (no Dropout modules in the network; two greedy `select_actions` calls on identical inputs return identical actions).
-- **Done note:** —
+- **Done note:** 2026-07-08 — `dropout` param + module removed from `GNNMessagePassing` (LayerNorm kept); `select_actions` wraps inference in `eval()`/try-finally restore. Dropout carried no parameters, so state_dict keys are unchanged (checkpoint guard green). Acceptance PASS.
 
-### 3.5 `[ ]` Vectorized `train_step` *(report B1.2)*
+### 3.5 `[x]` Vectorized `train_step` *(report B1.2)*
 - **What:** `GNNLayer`/`GNNMessagePassing` accept batched inputs (`(B,N,obs)`, `(B,N,N)`) via `matmul`; `train_step` drops the per-sample Python loop (one forward per timestep for the whole batch, online + target). Keep the GRU time loop.
 - **Test:** acceptance `test_stage3_5_vectorized_equivalence` (batched forward ≡ per-sample loop numerically, atol 1e-5; train_step runs); guard `test_trainer_checkpoint_roundtrip` stays green.
-- **Done note:** —
+- **Done note:** 2026-07-08 — `GNNLayer.forward` batched via `matmul` (mean/sum/max all handled; GRUCell fed `(B·N, d)` flat); `GNNMessagePassing` + `AgentQNetwork.forward` accept `(N,…)` and `(B,N,…)` (hidden stays `(B·N, r)` flat — the flatten order matches the old per-sample slicing, so RNN continuity is identical). Both per-sample loops in `train_step` replaced by one batched forward per timestep; GRU time loop kept. Acceptance PASS (batched ≡ single, atol 1e-5); checkpoint guard green.
 
-### 3.6 `[ ]` GNN aggregation direction *(report B1.3, OD-B)*
+### 3.6 `[x]` GNN aggregation direction *(report B1.3, OD-B)*
 - **What:** Aggregate over **in-edges + self-loops**: effective adjacency `Â = Aᵀ + I` (row-normalized as today). `build_adj` semantics unchanged (`A[i,j]=1` ⇔ i sends to j); the transpose lives in the GNN and is documented as the convention in both modules.
 - **Test:** acceptance `test_stage3_6_in_edge_aggregation` (single directed edge i→j on distinguishable features → j's embedding changes, i's only via self-loop).
-- **Done note:** —
+- **Done note:** 2026-07-08 — `GNNMessagePassing.forward` computes `Â = (Aᵀ + I).clamp(max=1)` once and feeds it to every layer (clamp guards double self-loops if an adjacency ever carries a diagonal); convention documented in both `gnn.py` and `build_adj`. Acceptance PASS (receiver hears sender; sender ignores receiver).
 
-### 3.7 `[ ]` Cosmetics *(report B0.5)*
+### 3.7 `[x]` Cosmetics *(report B0.5)*
 - **What:** Fix stale buffer comments; drop unused `HyperNetwork.n_agents` and dead `EpisodeStep.rewards` per-agent array; correct the reward-event log line (buffered-step count, not episode length); remove the trainer's `__main__` toy block or update it to real dims.
 - **Test:** battery green (no dedicated test).
-- **Done note:** —
+- **Done note:** 2026-07-08 — buffer comments rewritten (mask consumed by 3.1; `n_acting` naming replaces the misleading `N_actions  # 5 actions`); `EpisodeStep.rewards` dropped (controller updated; test helpers were already field-introspective); `HyperNetwork` loses the unused `n_agents` param/attr (no state_dict impact); trainer `__main__` toy block deleted + stale `Episode`/`EpisodeStep` imports pruned. The reward-event log line was already correct since 2.5 (logs the flushed buffered-step count) — verified, no change needed. Battery green.
 
 ---
 
@@ -291,8 +291,8 @@ None — TD1–TD4 and OD-A–D are all settled (see decision log). New decision
 |-------|-------|------|
 | 0 — Guardrails & baseline | 3 | 3 |
 | 1 — Judge de-noising | 4 | 4 |
-| 2 — Evaluation module & reward v2 | 10 | 8 (+2 in progress: 2.9/2.10 live runs pending) |
-| 3 — Trainer correctness | 7 | 0 |
+| 2 — Evaluation module & reward v2 | 10 | 10 |
+| 3 — Trainer correctness | 7 | 7 |
 | 4 — Loop engineering | 5 | 0 |
 | 5 — Docs & sync | 4 | 0 |
-| **Total** | **33** | **15** |
+| **Total** | **33** | **24** |

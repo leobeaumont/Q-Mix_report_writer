@@ -4,8 +4,10 @@ QMIX Centralized Training (Section 4 from the paper).
 Trains the entire system (GNNs, RNNs, mixing network) jointly by minimizing TD loss:
   L(θ) = E[(y^tot - Q_tot(τ, u; θ))^2]
 
-where the target y^tot is:
-  y^tot = R̄ + γ * max_{u'} Q_tot(τ', u'; θ^-)
+where the target y^tot uses Double-DQN (training_eval plan 3.3): the online
+network picks the (mask-valid) argmax action, the target network evaluates it:
+  u'* = argmax_{u' valid} Q(τ', u'; θ)
+  y^tot = R̄ + γ * (1 - done) * Q_tot(τ', u'*; θ^-)
 
 Gradients flow through mixing network → MLPs → RNNs → GNNs of each agent.
 """
@@ -19,7 +21,7 @@ from typing import Dict, Optional
 
 from .agent_network import AgentQNetwork, NUM_ACTIONS
 from .mixing_network import QMIXMixingNetwork
-from .replay_buffer import ReplayBuffer, EpisodeBatch, Episode, EpisodeStep
+from .replay_buffer import ReplayBuffer, EpisodeBatch
 from qmix_report_writer.utils.log import get_logger
 
 logger = get_logger("qmix_trainer")
@@ -111,12 +113,21 @@ class QMIXTrainer:
         to the unmasked distribution (defensive; the mask builder never emits
         one).
         """
-        with torch.no_grad():
-            q_values, new_hidden = self.agent_network(
-                observations.to(self.device),
-                adj_matrix.to(self.device),
-                hidden_states.to(self.device),
-            )
+        # eval()/restore around inference (plan 3.4): no stochastic layer
+        # remains today, but action selection must stay deterministic even if
+        # one is ever added.
+        was_training = self.agent_network.training
+        self.agent_network.eval()
+        try:
+            with torch.no_grad():
+                q_values, new_hidden = self.agent_network(
+                    observations.to(self.device),
+                    adj_matrix.to(self.device),
+                    hidden_states.to(self.device),
+                )
+        finally:
+            if was_training:
+                self.agent_network.train()
 
         actions = torch.zeros(self.n_acting_agents, dtype=torch.long)
         for i in range(self.n_acting_agents):
@@ -144,7 +155,7 @@ class QMIXTrainer:
         """Single training step: sample batch and minimize TD loss.
 
         L(θ) = E[(y^tot - Q_tot(τ, u; θ))^2]
-        y^tot = R̄ + γ * max_{u'} Q_tot(τ', u'; θ^-)
+        y^tot = R̄ + γ * (1 - done) * Q_tot(τ', argmax_{u' valid} Q(τ', u'; θ); θ^-)
         """
         if len(self.replay_buffer) < self.batch_size:
             return None
@@ -154,25 +165,17 @@ class QMIXTrainer:
 
         B, T, N, _ = batch.obs.shape
 
-        # Forward pass through agent network for entire sequence
+        # Forward pass through agent network for the entire sequence — one
+        # BATCHED forward per timestep (plan 3.5); the GRU time loop stays.
         hidden = self.agent_network.init_hidden(N).to(self.device)
         hidden = hidden.unsqueeze(0).expand(B, -1, -1).reshape(B * N, -1)
 
         all_q_values = []
         for t in range(T):
-            obs_t = batch.obs[:, t]  # (B, N, obs_dim)
-            adj_t = batch.adj[:, t]  # (B, N, N)
-
-            batch_q = []
-            batch_h = []
-            for b in range(B):
-                q_vals, h = self.agent_network(obs_t[b], adj_t[b], hidden[b * N:(b + 1) * N])
-                batch_q.append(q_vals)
-                batch_h.append(h)
-
-            q_stacked = torch.stack(batch_q)  # (B, N, n_actions)
-            hidden = torch.cat(batch_h, dim=0)
-            all_q_values.append(q_stacked)
+            q_t, hidden = self.agent_network(
+                batch.obs[:, t], batch.adj[:, t], hidden,
+            )  # (B, N, n_actions), (B*N, rnn_hidden)
+            all_q_values.append(q_t)
 
         all_q_values = torch.stack(all_q_values, dim=1)  # (B, T, N, n_actions)
         acting_q_values = all_q_values[:, :, :self.n_acting_agents, :]  # (B, T, N-1, n_actions) removed collector agent Q-value
@@ -188,34 +191,34 @@ class QMIXTrainer:
             q_tot_list.append(q_tot)
         q_tot = torch.stack(q_tot_list, dim=1)  # (B, T)
 
-        # Target Q-values using target networks
+        # Target Q-values using target networks (batched, plan 3.5)
         with torch.no_grad():
             target_hidden = self.target_agent_network.init_hidden(N).to(self.device)
             target_hidden = target_hidden.unsqueeze(0).expand(B, -1, -1).reshape(B * N, -1)
 
             target_q_values = []
             for t in range(T):
-                obs_t = batch.obs[:, t]
-                adj_t = batch.adj[:, t]
-
-                batch_tq = []
-                batch_th = []
-                for b in range(B):
-                    tq, th = self.target_agent_network(obs_t[b], adj_t[b], target_hidden[b * N:(b + 1) * N])
-                    batch_tq.append(tq)
-                    batch_th.append(th)
-
-                tq_stacked = torch.stack(batch_tq)
-                target_hidden = torch.cat(batch_th, dim=0)
-                target_q_values.append(tq_stacked)
+                tq_t, target_hidden = self.target_agent_network(
+                    batch.obs[:, t], batch.adj[:, t], target_hidden,
+                )
+                target_q_values.append(tq_t)
 
             target_q_values = torch.stack(target_q_values, dim=1)  # (B, T, N, n_actions)
             target_acting_q = target_q_values[:, :, :self.n_acting_agents, :]  # (B, T, N-1, n_actions)
-            target_max_q = target_acting_q.max(dim=-1)[0]  # (B, T, N-1)
+
+            # Double-DQN (plan 3.3): the ONLINE net picks a*, the TARGET net
+            # evaluates it — replaces the target-side max. Invalid actions are
+            # excluded from the argmax via the stored masks (plan 3.1); padded
+            # slots carry all-valid masks, so no row is -inf everywhere, and
+            # their values are killed by (1 - done) in the TD targets.
+            online_q = acting_q_values.detach().clone()
+            online_q[~batch.avail_actions] = float("-inf")
+            best_actions = online_q.argmax(dim=-1, keepdim=True)  # (B, T, N-1, 1)
+            target_chosen_q = target_acting_q.gather(-1, best_actions).squeeze(-1)  # (B, T, N-1)
 
             target_q_tot_list = []
             for t in range(T):
-                tq_tot = self.target_mixing_network(target_max_q[:, t], batch.global_state[:, t])
+                tq_tot = self.target_mixing_network(target_chosen_q[:, t], batch.global_state[:, t])
                 target_q_tot_list.append(tq_tot)
             target_q_tot = torch.stack(target_q_tot_list, dim=1)  # (B, T)
 
@@ -255,6 +258,7 @@ class QMIXTrainer:
         return EpisodeBatch(
             obs=batch.obs.to(self.device),
             actions=batch.actions.to(self.device),
+            avail_actions=batch.avail_actions.to(self.device),
             rewards=batch.rewards.to(self.device),
             adj=batch.adj.to(self.device),
             global_state=batch.global_state.to(self.device),
@@ -282,75 +286,3 @@ class QMIXTrainer:
         self._update_targets()
         logger.info(f"Loaded QMIX checkpoint from {path} (step {self.training_step})")
 
-if __name__ == "__main__":
-    """
-    Small check to ensure all dimensions are synchronized throughout the pipeline.
-    This part of the code is AI generated.
-    """
-
-    # 1. Initialize Trainer (6 nodes total, 5 will act)
-    print("Initializing trainer...")
-    trainer = QMIXTrainer(
-        n_agents=6, 
-        obs_dim=16, 
-        state_dim=32, 
-        n_actions=5, 
-        device="cpu"
-    )
-
-    # 2. Simulate a short episode (3 steps)
-    print("Simulating interaction...")
-    episode = Episode()
-    
-    for t in range(3):
-        # Observations for 6 nodes
-        obs = np.random.randn(6, 16).astype(np.float32)
-        # 6x6 Adjacency matrix
-        adj = np.eye(6).astype(np.float32)
-        # Global state
-        state = np.random.randn(32).astype(np.float32)
-        
-        # Select actions (should return 5 actions)
-        # We need a dummy hidden state for the first step
-        if t == 0:
-            hidden = trainer.agent_network.init_hidden(6)
-            
-        actions, hidden = trainer.select_actions(
-            torch.from_numpy(obs), 
-            torch.from_numpy(adj), 
-            hidden
-        )
-        
-        # Verify action shape
-        assert len(actions) == 5, f"Error: Expected 5 actions, got {len(actions)}"
-        
-        # Create storage step
-        step = EpisodeStep(
-            observations=obs,
-            actions=actions.numpy(), # 5 actions
-            rewards=np.zeros(6),
-            team_reward=1.0,         # Constant reward to check convergence
-            adj_matrix=adj,
-            global_state=state,
-            done=(t == 2)
-        )
-        
-        episode.add_step(step)
-
-    # 3. Add to buffer and train
-    print("Pushing to buffer...")
-    trainer.replay_buffer.push(episode)
-    
-    # We need at least batch_size episodes to train
-    # For testing, we just duplicate this one
-    for _ in range(trainer.batch_size):
-        trainer.replay_buffer.push(episode)
-
-    print("Running training step...")
-    try:
-        stats = trainer.train_step()
-        if stats:
-            print(f"Success! Loss: {stats['loss']:.4f}")
-            print("Pipeline dimensions are correctly synchronized.")
-    except Exception as e:
-        print(f"Pipeline failed! Error: {e}")

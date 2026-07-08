@@ -205,7 +205,6 @@ class QMIXRoundController(RoundController):
             self._pending = EpisodeStep(
                 observations=obs.astype(np.float32),
                 actions=actions_t.numpy(),
-                rewards=np.zeros(len(self.acting_agents)),
                 team_reward=0.0,  # set by the next reward event (or 0-flush)
                 adj_matrix=adj.astype(np.float32),
                 global_state=build_global_state(obs, adj).astype(np.float32),

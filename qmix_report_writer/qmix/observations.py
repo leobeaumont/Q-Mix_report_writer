@@ -234,7 +234,12 @@ def build_observations(nodes: Dict[str, object], task: str) -> np.ndarray:
 
 
 def build_adj(nodes: Dict[str, object]) -> np.ndarray:
-    """Adjacency matrix of the current spatial connections."""
+    """Adjacency matrix of the current spatial connections.
+
+    Convention: A[i, j] = 1 ⇔ i SENDS to j. The GNN aggregates over
+    IN-edges, so it internally uses Â = Aᵀ + I (training_eval plan 3.6,
+    OD-B) — the transpose lives in GNNMessagePassing, not here.
+    """
     node_list = list(nodes.values())
     n = len(node_list)
     matrix = np.zeros((n, n))

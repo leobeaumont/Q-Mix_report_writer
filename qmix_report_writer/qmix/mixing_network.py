@@ -19,14 +19,13 @@ class HyperNetwork(nn.Module):
     Outputs are passed through abs() to ensure non-negativity (monotonicity).
     """
 
-    def __init__(self, state_dim: int, n_agents: int, hidden_dim: int, output_dim: int):
+    def __init__(self, state_dim: int, hidden_dim: int, output_dim: int):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim),
         )
-        self.n_agents = n_agents
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.net(state)
@@ -57,14 +56,14 @@ class QMIXMixingNetwork(nn.Module):
         self.mixing_hidden_dim = mixing_hidden_dim
 
         self.hyper_w1 = HyperNetwork(
-            state_dim, n_agents, hyper_hidden_dim, n_agents * mixing_hidden_dim
+            state_dim, hyper_hidden_dim, n_agents * mixing_hidden_dim
         )
         self.hyper_b1 = nn.Sequential(
             nn.Linear(state_dim, mixing_hidden_dim),
         )
 
         self.hyper_w2 = HyperNetwork(
-            state_dim, n_agents, hyper_hidden_dim, mixing_hidden_dim
+            state_dim, hyper_hidden_dim, mixing_hidden_dim
         )
         self.hyper_b2 = nn.Sequential(
             nn.Linear(state_dim, hyper_hidden_dim),

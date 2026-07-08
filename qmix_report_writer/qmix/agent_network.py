@@ -81,21 +81,25 @@ class AgentQNetwork(nn.Module):
         hidden_state: torch.Tensor,
     ) -> tuple:
         """
-        Single-step forward pass for one agent.
+        Single-step forward pass for all agents (optionally batched, plan 3.5).
 
         Args:
-            obs: (N, obs_dim) observations for all agents at time t
-            adj_matrix: (N, N) communication graph
-            hidden_state: (N, rnn_hidden_dim) z_{t-1}^i for each agent
+            obs: (N, obs_dim) or (B, N, obs_dim) observations at time t
+            adj_matrix: (N, N) or (B, N, N) communication graph
+            hidden_state: (N, rnn_hidden_dim) or (B*N, rnn_hidden_dim)
+                z_{t-1}^i for each agent (flat across the batch)
         Returns:
-            q_values: (N, n_actions) Q_i(τ_t^i, ·) for each agent
-            new_hidden: (N, rnn_hidden_dim) z_t^i for each agent
+            q_values: (N, n_actions) or (B, N, n_actions)
+            new_hidden: same 2D layout as hidden_state
         """
-        gnn_out = self.gnn(obs, adj_matrix)  # h_t^{i,(L)}: (N, gnn_hidden_dim)
+        gnn_out = self.gnn(obs, adj_matrix)  # h_t^{i,(L)}: (..., gnn_hidden_dim)
 
-        new_hidden = self.rnn(gnn_out, hidden_state)  # z_t^i: (N, rnn_hidden_dim)
+        flat = gnn_out.reshape(-1, gnn_out.shape[-1])
+        new_hidden = self.rnn(flat, hidden_state)  # z_t^i: (B*N, rnn_hidden_dim)
 
-        q_values = self.q_head(new_hidden)  # Q_i: (N, n_actions)
+        q_values = self.q_head(new_hidden)  # Q_i: (B*N, n_actions)
+        if obs.dim() == 3:
+            q_values = q_values.reshape(obs.shape[0], obs.shape[1], -1)
 
         return q_values, new_hidden
 
