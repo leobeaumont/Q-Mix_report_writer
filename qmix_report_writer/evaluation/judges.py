@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -68,6 +70,9 @@ class ChunkScore:
     n_unsupported: int = 0
     n_contradicted: int = 0
     notes: str = ""
+    # The normalized {claim, verdict} items behind the counts — consumed by
+    # the training log and the benchmark's grounding probe diagnostics.
+    claims: list = field(default_factory=list)
 
 
 @dataclass
@@ -136,17 +141,29 @@ _CHUNK_AUDIT_KEYS = tuple(k for k in CHUNK_AUDIT_SCHEMA["required"]
                           if k != "local_audit_notes")
 
 CLAIM_CHECK_PROMPT = """### Role
-You are a claims-verification engine. Extract the substantive FACTUAL claims from the chunk (quantitative values, mechanisms, named relationships — the most load-bearing ones, at most 8) and give a verdict for each one STRICTLY against the provided sources.
+You are a claims-verification engine. Extract the substantive FACTUAL claims from the chunk and give a verdict for each one STRICTLY against the provided sources.
+
+### What counts as a claim — extract ALL of them (up to 10)
+* Every quantitative statement: numbers, ranges, units, dates, percentages, equations. These take PRIORITY: when the chunk asserts more claims than fit, quantitative claims are extracted before qualitative ones — they are the checkable ones.
+* Every mechanism or causal assertion ("X causes / implies / depends on Y").
+* Every named relationship, law, definition, or attribution.
+An empty claims list is ONLY acceptable for a chunk that asserts nothing factual at all (pure transitions, headings, editorial framing). If the chunk contains numbers, units, or mechanisms, it contains claims — extract them.
 
 ### Verdicts
 * supported     — the sources state the claim or directly entail it.
-* unsupported   — the sources neither confirm nor deny it.
-* contradicted  — the sources state otherwise.
+* unsupported   — the sources are SILENT on the claim: they neither confirm nor deny it.
+* contradicted  — the sources say OTHERWISE: a different value for the same quantity, an opposite dependence or direction, an incompatible mechanism. Disagreement is contradiction, not absence — when the sources give a different number for the same quantity the verdict is `contradicted`, never `unsupported`.
 
 ### Rules
-* ONLY the provided sources count as evidence. A claim that is true general knowledge but absent from the sources is `unsupported`.
+* Extract claims from the <current chunk> ONLY — the <sources> are the evidence to verdict against, never a source of claims.
+* ONLY the provided sources count as evidence. A claim that is true general knowledge but absent from the sources is `unsupported` (or `contradicted` if the sources disagree with it).
+* For EACH claim, first copy the sources' exact words on it into `evidence` (verbatim quote, digits copied EXACTLY as the source prints them; empty string if the sources are silent), THEN verdict by comparing the claim against your quote.
+* When a claim contains a number, compare it DIGIT FOR DIGIT with the quoted evidence — a claim is only `supported` if the value matches exactly; a differing value is `contradicted`.
 * Quote each claim briefly (one line), do not rewrite it.
-* Output your response as a JSON object matching the provided schema.
+
+### Output shape
+Return a JSON object with ONE key `claims`: an array of OBJECTS, each carrying the keys `claim` (the one-line quote), `evidence` (the sources' exact words, or ""), and `verdict` (one of the three verdicts) — in that order. Never return parallel arrays, never bare strings.
+Example: {"claims": [{"claim": "g is about 9.81 m/s^2", "evidence": "free-fall acceleration g is about 9.81 m/s^2", "verdict": "supported"}]}
 """
 
 CLAIM_CHECK_SCHEMA = {
@@ -154,14 +171,23 @@ CLAIM_CHECK_SCHEMA = {
     "properties": {
         "claims": {
             "type": "array",
+            "description": "Every substantive factual claim in the chunk, each "
+                           "with its evidence quote and verdict. Empty ONLY "
+                           "when the chunk asserts nothing factual.",
             "items": {
                 "type": "object",
                 "properties": {
                     "claim": {"type": "string"},
+                    # Evidence-before-verdict (live finding 2026-07-08): without
+                    # a forced verbatim quote the judge rubber-stamps `supported`
+                    # on near-duplicate sources without checking the digits.
+                    "evidence": {"type": "string",
+                                 "description": "The sources' exact words on "
+                                                "this claim; empty if silent."},
                     "verdict": {"type": "string",
                                 "enum": ["supported", "unsupported", "contradicted"]},
                 },
-                "required": ["claim", "verdict"],
+                "required": ["claim", "evidence", "verdict"],
                 "additionalProperties": False,
             },
         },
@@ -169,6 +195,117 @@ CLAIM_CHECK_SCHEMA = {
     "required": ["claims"],
     "additionalProperties": False,
 }
+
+_VERDICTS = ("supported", "unsupported", "contradicted")
+_TRAILING_VERDICT_RE = re.compile(
+    r"[\s\-—:(\[]*\b(supported|unsupported|contradicted)\b\s*[.!)\]]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_claims(reply) -> list:
+    """The usable {claim, verdict} items of a claim-check reply.
+
+    Live-observed (2026-07-08): Ollama's grammar `format` is NOT enforced on
+    the NESTED claim schema — the judge answered with parallel string arrays
+    (`{"claims": [...], "verdicts": [...]}`), which the composer silently
+    dropped: 0 claims counted, grounding inert, and the empty-claims guard
+    blind because the list was non-empty. Normalize every shape seen or
+    plausible: proper objects, parallel arrays, strings with a trailing
+    verdict. Items whose verdict cannot be determined are dropped — a verdict
+    is never guessed.
+    """
+    if not isinstance(reply, dict):
+        return []
+    raw = reply.get("claims")
+    if not isinstance(raw, list):
+        return []
+    verdicts = reply.get("verdicts")
+    parallel = verdicts if isinstance(verdicts, list) else []
+    out = []
+    for i, item in enumerate(raw):
+        claim = verdict = None
+        evidence = ""
+        if isinstance(item, dict):
+            claim = item.get("claim")
+            verdict = item.get("verdict")
+            evidence = str(item.get("evidence") or "")
+        elif isinstance(item, str):
+            claim = item
+            if i < len(parallel):
+                verdict = parallel[i]
+            else:
+                match = _TRAILING_VERDICT_RE.search(item)
+                if match:
+                    verdict = match.group(1)
+                    claim = item[:match.start()].strip()
+        verdict = re.sub(r"[^a-z]+", "", str(verdict or "").lower())
+        if claim and verdict in _VERDICTS:
+            out.append({"claim": str(claim), "evidence": evidence,
+                        "verdict": verdict})
+    return out
+
+
+def _norm_for_match(text: str) -> str:
+    """Case/whitespace/punctuation-insensitive matching alphabet (digits kept).
+
+    NFKD first: PDF-extracted sources carry ligatures (ﬁ/ﬂ) and composed
+    accents that the judge's quote renders as plain letters — both sides must
+    land on the same alphabet or real quotes get falsely downgraded.
+    """
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _verify_evidence(items: list, sources: list) -> list:
+    """Downgrade supported/contradicted verdicts whose evidence is NOT in the
+    sources (to `unsupported`).
+
+    Live-observed (2026-07-08): when the chunk and a source carry near-twin
+    sentences differing only in digits, the judge COPIES THE CLAIM as its own
+    "evidence" and verdicts `supported` without ever looking the value up —
+    no prompt wording fixed it. The evidence field is a verbatim source quote
+    by contract, so its presence in the sources is machine-checkable: a
+    fabricated quote must not count as support (nor as contradiction). The
+    original verdict is kept as `verdict_raw` for diagnostics.
+    """
+    haystack = _norm_for_match(" ".join(
+        (src.get("content") or src.get("text") or "") if isinstance(src, dict)
+        else str(src)
+        for src in sources or []
+    ))
+    out = []
+    for item in items:
+        if item["verdict"] in ("supported", "contradicted"):
+            evidence = _norm_for_match(item.get("evidence", ""))
+            if not evidence or evidence not in haystack:
+                item = dict(item, verdict="unsupported",
+                            verdict_raw=item["verdict"])
+        out.append(item)
+    return out
+
+
+# Empty-claims guard (plan 2.9): grammar-constrained decoding lets the model
+# emit a perfectly valid `{"claims": []}`, which silently disables TD3's
+# grounding (empty -> factor 1.0). When the chunk visibly carries factual
+# content, an extraction with no USABLE claims is treated as under-firing and
+# re-asked once. Markers: digits (values, dates, percentages) or inline math.
+# Mechanism-only chunks without numbers are not deterministically detectable —
+# for those the strengthened prompt is the only line of defense.
+_FACTUAL_MARKER_RE = re.compile(r"\d|\$[^$\n]+\$")
+
+_EMPTY_CLAIMS_NUDGE = (
+    "You returned an empty claims list, but the chunk contains numbers, units, "
+    "or quantitative statements — those ARE factual claims. Re-read the chunk "
+    "and extract every quantitative or mechanistic assertion, each with its "
+    "verdict against the sources. Return an empty list ONLY if the chunk truly "
+    "asserts nothing factual."
+)
+
+
+def _has_factual_markers(text: str) -> bool:
+    return bool(_FACTUAL_MARKER_RE.search(text or ""))
+
 
 MACRO_PROMPT = f"""### Role
 You are a Senior Scientific Editor and Content Architect. Your goal is to evaluate the structural integrity and high-level quality of a finished technical report.
@@ -450,21 +587,47 @@ class ReportEvaluator:
             if sources:
                 claim_user = _tagged("sources", _render_sources(sources))
                 claim_user += _tagged("current chunk", chunk)
+                claim_messages = [
+                    {"role": "system", "content": CLAIM_CHECK_PROMPT},
+                    {"role": "user", "content": claim_user},
+                ]
                 claims = await _judge_call(
-                    self.llm,
-                    [{"role": "system", "content": CLAIM_CHECK_PROMPT},
-                     {"role": "user", "content": claim_user}],
-                    CLAIM_CHECK_SCHEMA,
-                    ("claims",),
+                    self.llm, claim_messages, CLAIM_CHECK_SCHEMA, ("claims",),
                 )
+                if not _normalize_claims(claims) and _has_factual_markers(chunk):
+                    # No USABLE claims (empty OR all-unusable items) on a
+                    # visibly factual chunk — under-extraction, not absence
+                    # (plan 2.9): re-ask once with the evidence pointed out.
+                    # A failed re-ask keeps the first result — it must not
+                    # turn an accepted (if lazy) reply into a skipped event.
+                    try:
+                        claims = await _judge_call(
+                            self.llm,
+                            claim_messages + [
+                                {"role": "assistant",
+                                 "content": json.dumps({"claims": []})},
+                                {"role": "user", "content": _EMPTY_CLAIMS_NUDGE},
+                            ],
+                            CLAIM_CHECK_SCHEMA,
+                            ("claims",),
+                        )
+                    except JudgeError:
+                        logger.warning(
+                            "empty-claims re-ask failed; keeping the empty "
+                            "extraction (no grounding modulation)"
+                        )
         except JudgeError as exc:
             logger.warning(f"score_chunk judge failure: {exc}")
             return None
 
-        return self._compose_chunk_score(audit, claims)
+        claim_items = None
+        if claims is not None:
+            claim_items = _verify_evidence(_normalize_claims(claims), sources)
+        return self._compose_chunk_score(audit, claim_items)
 
     @staticmethod
-    def _compose_chunk_score(audit: dict, claims: Optional[dict]) -> ChunkScore:
+    def _compose_chunk_score(audit: dict,
+                             claim_items: Optional[list]) -> ChunkScore:
         logic = int(audit.get("logical_soundness", 0))
         verif = int(audit.get("verifiability_score", 0))
         tech = int(audit.get("technical_precision", 0))
@@ -473,17 +636,14 @@ class ReportEvaluator:
         rubric_mean = (logic + verif + tech + density) / 20.0
 
         n_sup = n_unsup = n_contra = 0
-        if claims is not None:
-            for item in claims.get("claims", []) or []:
-                if not isinstance(item, dict):
-                    continue
-                verdict = str(item.get("verdict", "")).strip().lower()
-                if verdict == "supported":
-                    n_sup += 1
-                elif verdict == "unsupported":
-                    n_unsup += 1
-                elif verdict == "contradicted":
-                    n_contra += 1
+        claim_items = claim_items or []
+        for item in claim_items:
+            if item["verdict"] == "supported":
+                n_sup += 1
+            elif item["verdict"] == "unsupported":
+                n_unsup += 1
+            elif item["verdict"] == "contradicted":
+                n_contra += 1
         n_claims = n_sup + n_unsup + n_contra
 
         # Grounding modulation: supported = full credit, unsupported = half
@@ -507,6 +667,7 @@ class ReportEvaluator:
             n_unsupported=n_unsup,
             n_contradicted=n_contra,
             notes=str(audit.get("local_audit_notes", ""))[:500],
+            claims=claim_items,
         )
 
     # -- macro: terminal whole-report judge (plan 2.3) ----------------------

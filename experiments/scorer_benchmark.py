@@ -9,7 +9,12 @@ versioned real papers in tests/test_documents/:
   * repeat variance  — score the same document k times, per-run σ (the
     reward's noise floor);
   * corruption probes — off-topic section injected / sections shuffled /
-    numbers perturbed: the score must drop vs the clean run.
+    numbers perturbed: the score must drop vs the clean run;
+  * grounding probe (plan 2.10) — the corpus PDFs carry no stored sources, so
+    the claim check + grounding factor (TD3) are otherwise untestable here:
+    each numeric chunk is scored once against ITSELF as the source (expect
+    supported claims) and once against a numbers-perturbed copy (expect
+    contradicted claims and a score drop).
 
 The scoring path is a pluggable async *adapter* `(task, chunks) -> result
 dict`. The default `v2` adapter runs the Stage-2 grounded `ReportEvaluator`
@@ -21,9 +26,10 @@ Metric functions are pure and offline-tested (test_training_eval_acceptance
 Stage 0.2); actually scoring documents needs the live Ollama judges.
 
 Usage (from the repo root, Ollama serving the judge model):
-    .venv\\Scripts\\python.exe experiments\\scorer_benchmark.py rank
+    .venv\\Scripts\\python.exe experiments\\scorer_benchmark.py rank [--self-sources] [--derive-subject]
     .venv\\Scripts\\python.exe experiments\\scorer_benchmark.py repeat --doc "Towards(v22)" -k 5
-    .venv\\Scripts\\python.exe experiments\\scorer_benchmark.py corrupt --doc "Towards(v22)"
+    .venv\\Scripts\\python.exe experiments\\scorer_benchmark.py corrupt --doc "Towards(v22)" [--derive-subject]
+    .venv\\Scripts\\python.exe experiments\\scorer_benchmark.py ground --doc "Towards(v22)" [--max-chunks 8]
 Results land in tests/scoring_results/benchmark_<mode>_<timestamp>.{json,md}.
 """
 
@@ -78,6 +84,66 @@ def repeat_variance(scores):
     return pstdev(scores)
 
 
+def derive_subject(text: str, max_words: int = 20) -> str:
+    """A crude per-document subject: the first words of the extracted text
+    (PDF extraction starts at the title). Keeps the judges from being
+    subject-blind on corpus documents that carry no commissioned task
+    (plan 2.10 — task absence is a benchmark artifact, not a scorer input)."""
+    words = re.sub(r"\s+", " ", text or "").strip().split(" ")
+    return " ".join(words[:max_words]).strip()
+
+
+def grounding_probe_summary(rows):
+    """Aggregate grounding-probe rows (pure; offline-tested).
+
+    Each row: {"supporting": {...}, "contradicting": {...}} where both passes
+    carry score / n_claims / n_supported / n_unsupported / n_contradicted /
+    grounding_ratio for the SAME chunk (self-source vs perturbed-source).
+
+      * claims_fired_fraction — chunks where BOTH passes extracted >= 1 claim
+        (the plan-2.9 health metric: grounding actually engages);
+      * mean_grounding_supporting — mean grounding_ratio on the supporting
+        pass (None when no pass produced a ratio);
+      * contradiction_detected_fraction — contradicting passes with >= 1
+        contradicted verdict;
+      * mean_contradicted_claims — mean n_contradicted on the contradicting pass;
+      * mean_score_drop — mean(supporting.score - contradicting.score); must
+        be positive for TD3 to punish factually-wrong content.
+      * numeric_claim_fraction — digit-carrying claims / all claims on the
+        supporting pass. Interprets the rest: number-perturbation can only
+        create contradictions in NUMERIC claims, so a low fraction means the
+        probe result reflects the chunk's prose, not verdicting quality
+        (live finding 2026-07-08: qualitative claims are correctly supported
+        by a numbers-perturbed source).
+    """
+    if not rows:
+        return {"n_probed": 0, "claims_fired_fraction": 0.0,
+                "mean_grounding_supporting": None,
+                "contradiction_detected_fraction": 0.0,
+                "mean_contradicted_claims": 0.0, "mean_score_drop": 0.0,
+                "numeric_claim_fraction": None}
+    fired = sum(1 for r in rows if r["supporting"]["n_claims"] > 0
+                and r["contradicting"]["n_claims"] > 0)
+    ratios = [r["supporting"]["grounding_ratio"] for r in rows
+              if r["supporting"]["grounding_ratio"] is not None]
+    detected = sum(1 for r in rows if r["contradicting"]["n_contradicted"] > 0)
+    total_claims = sum(r["supporting"].get("n_claims", 0) for r in rows)
+    numeric_claims = sum(r["supporting"].get("n_numeric_claims", 0) for r in rows)
+    return {
+        "n_probed": len(rows),
+        "claims_fired_fraction": fired / len(rows),
+        "mean_grounding_supporting": (sum(ratios) / len(ratios)) if ratios else None,
+        "contradiction_detected_fraction": detected / len(rows),
+        "mean_contradicted_claims": (
+            sum(r["contradicting"]["n_contradicted"] for r in rows) / len(rows)),
+        "mean_score_drop": (
+            sum(r["supporting"]["score"] - r["contradicting"]["score"]
+                for r in rows) / len(rows)),
+        "numeric_claim_fraction": (
+            numeric_claims / total_claims if total_claims else None),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Corruption probes (deterministic, pure)
 # ---------------------------------------------------------------------------
@@ -104,6 +170,21 @@ def shuffle_sections(doc: str) -> str:
     while shuffled == parts:
         rng.shuffle(shuffled)
     return "\n\n".join(p.strip() for p in shuffled)
+
+
+def reorder_sentences(piece: str) -> str:
+    """Sentence-reversed copy: same facts, different surface (pure).
+
+    The grounding probe's source must NOT be a verbatim copy of the chunk:
+    live-observed (2026-07-08), the judge treats near-identical texts as "the
+    same text" and copies the claim as its own evidence without looking the
+    value up — training sources are paraphrases, never byte-copies, so the
+    probe must not be one either.
+    """
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", piece or "") if s.strip()]
+    if len(sentences) < 2:
+        return (piece or "").strip()
+    return " ".join(reversed(sentences))
 
 
 def perturb_numbers(doc: str) -> str:
@@ -170,14 +251,16 @@ def discover_families(docs_dir: str = DOCS_DIR):
 # Scorer adapters
 # ---------------------------------------------------------------------------
 
-async def evaluator_scorer_adapter(task, chunks, evaluator=None) -> dict:
+async def evaluator_scorer_adapter(task, chunks, evaluator=None,
+                                   sources_per_chunk=None) -> dict:
     """Scoring through the v2 grounded evaluator (Stage 2, TD1 shape).
 
     Each chunk is scored on its own (`score_chunk`; the corpus PDFs carry no
-    stored sources, so this exercises the audit-only path), then ONE terminal
-    macro call scores the whole document — the same per-chunk + terminal
-    structure the training reward uses. Final composite mirrors the legacy
-    weighting for comparability: 0.3 * macro + 0.7 * mean(chunk scores).
+    stored sources, so by default this exercises the audit-only path — pass
+    `sources_per_chunk` to engage the claim check, plan 2.10), then ONE
+    terminal macro call scores the whole document — the same per-chunk +
+    terminal structure the training reward uses. Final composite mirrors the
+    legacy weighting for comparability: 0.3 * macro + 0.7 * mean(chunk scores).
 
     `evaluator` is injectable for tests; None builds the config default.
     """
@@ -189,7 +272,9 @@ async def evaluator_scorer_adapter(task, chunks, evaluator=None) -> dict:
     chunk_scores, failures = [], 0
     for i, chunk in enumerate(chunks):
         result = await evaluator.score_chunk(
-            chunk=chunk, sources=[], task=task, context=None,
+            chunk=chunk,
+            sources=(sources_per_chunk[i] if sources_per_chunk else []),
+            task=task, context=None,
         )
         if result is None:
             # Mirror the training controller (plan 1.3): a failed judge skips
@@ -239,15 +324,23 @@ def get_adapter(name: str):
 # Benchmark modes (live: need the Ollama judges)
 # ---------------------------------------------------------------------------
 
-async def run_ranking(adapter, docs_dir: str = DOCS_DIR) -> dict:
+async def run_ranking(adapter, docs_dir: str = DOCS_DIR,
+                      self_sources: bool = False,
+                      use_derived_subject: bool = False) -> dict:
     families = discover_families(docs_dir)
     results = {"mode": "rank", "families": {}, "pairs": [], "chunk_scores": {},
-               "judge_failures": {}}
+               "judge_failures": {}, "self_sources": self_sources,
+               "derived_subject": use_derived_subject}
     for family, stems in families.items():
         scores = {}
         for stem in stems:
-            chunks = chunk_text(extract_text(os.path.join(docs_dir, stem + ".pdf")))
-            outcome = await adapter(None, chunks)  # corpus PDFs: subject unknown
+            text = extract_text(os.path.join(docs_dir, stem + ".pdf"))
+            chunks = chunk_text(text)
+            task = derive_subject(text) if use_derived_subject else None
+            sources = ([[{"source": "reordered_excerpt",
+                          "content": reorder_sentences(c)}] for c in chunks]
+                       if self_sources else None)
+            outcome = await adapter(task, chunks, sources_per_chunk=sources)
             scores[stem] = outcome["final_score"]
             # Per-chunk detail: zero-scored chunks are the parse-failure
             # signature (defect A0.3) — keep them inspectable.
@@ -279,17 +372,97 @@ async def run_repeat(adapter, doc_stem: str, k: int, docs_dir: str = DOCS_DIR) -
             "sigma": repeat_variance(scores)}
 
 
-async def run_corruption(adapter, doc_stem: str, docs_dir: str = DOCS_DIR) -> dict:
+async def run_corruption(adapter, doc_stem: str, docs_dir: str = DOCS_DIR,
+                         use_derived_subject: bool = False) -> dict:
     text = extract_text(os.path.join(docs_dir, doc_stem + ".pdf"))
-    clean = await adapter(None, chunk_text(text))
+    # A derived subject un-blinds subject_coverage — in 2.8 the off-topic
+    # probe stayed flat precisely because the judges had no subject.
+    task = derive_subject(text) if use_derived_subject else None
+    clean = await adapter(task, chunk_text(text))
     results = {"mode": "corrupt", "doc": doc_stem,
+               "derived_subject": use_derived_subject,
                "clean_score": clean["final_score"], "probes": {}}
     print(f"  clean: {clean['final_score']:.4f}")
     for name, corrupt in CORRUPTIONS.items():
-        outcome = await adapter(None, chunk_text(corrupt(text)))
+        outcome = await adapter(task, chunk_text(corrupt(text)))
         drop = clean["final_score"] - outcome["final_score"]
         results["probes"][name] = {"score": outcome["final_score"], "drop": drop}
         print(f"  {name}: {outcome['final_score']:.4f} (drop {drop:+.4f})")
+    return results
+
+
+async def run_grounding(doc_stem: str, docs_dir: str = DOCS_DIR,
+                        max_chunks: int = 8, text: str = None,
+                        evaluator=None, probe_chars: int = 1500) -> dict:
+    """Grounding probe (plan 2.10): per numeric chunk, one scoring pass
+    against ITSELF as the source (claims should come back supported) and one
+    against a numbers-perturbed copy (claims should come back contradicted,
+    score should drop). This is the only benchmark mode that exercises the
+    claim check — the corpus carries no stored sources.
+
+    Probed pieces are trimmed to `probe_chars` (~ a training section, not a
+    4000-char benchmark chunk): the probe measures the evaluator under the
+    conditions the TRAINING reward sees.
+
+    `text`/`evaluator` are injectable for offline tests.
+    """
+    from qmix_report_writer.evaluation import ReportEvaluator
+
+    if evaluator is None:
+        evaluator = ReportEvaluator()
+    if text is None:
+        text = extract_text(os.path.join(docs_dir, doc_stem + ".pdf"))
+    subject = derive_subject(text)
+    numeric = [(i, c[:probe_chars]) for i, c in enumerate(chunk_text(text))
+               if re.search(r"\d", c[:probe_chars])][:max_chunks]
+
+    def _row(cs):
+        # `claims` items double as diagnostics: only NUMERIC claims can be
+        # contradicted by number-perturbation, so their count says whether a
+        # 0-contradicted result indicts the verdicting or just the prose.
+        items = getattr(cs, "claims", []) or []
+        return {"score": cs.score, "n_claims": cs.n_claims,
+                "n_supported": cs.n_supported, "n_unsupported": cs.n_unsupported,
+                "n_contradicted": cs.n_contradicted,
+                "grounding_ratio": cs.grounding_ratio,
+                "n_numeric_claims": sum(
+                    1 for it in items if re.search(r"\d", it.get("claim", ""))),
+                "claims": items}
+
+    rows, failures = [], 0
+    for i, chunk in numeric:
+        # Paraphrase-like sources (sentence-reversed): a verbatim self-source
+        # defeats evidence lookup — see reorder_sentences.
+        support_src = reorder_sentences(chunk)
+        sup = await evaluator.score_chunk(
+            chunk=chunk,
+            sources=[{"source": "reordered_excerpt", "content": support_src}],
+            task=subject, context=None)
+        con = await evaluator.score_chunk(
+            chunk=chunk,
+            sources=[{"source": "perturbed_excerpt",
+                      "content": perturb_numbers(support_src)}],
+            task=subject, context=None)
+        if sup is None or con is None:
+            failures += 1
+            print(f"  [judge failure on chunk {i}]")
+            continue
+        sup_row, con_row = _row(sup), _row(con)
+        rows.append({"chunk_index": i, "supporting": sup_row,
+                     "contradicting": con_row})
+        print(f"  chunk {i}: support {sup.score:.4f} "
+              f"({sup.n_supported}s/{sup.n_unsupported}u/{sup.n_contradicted}c, "
+              f"{sup_row['n_numeric_claims']} numeric) | "
+              f"perturbed {con.score:.4f} ({con.n_contradicted} contradicted)")
+    if numeric and not rows:
+        raise RuntimeError(
+            "all probed chunks failed to score — judge/endpoint is down; "
+            "aborting instead of reporting a fake probe"
+        )
+
+    results = {"mode": "ground", "doc": doc_stem, "subject": subject,
+               "judge_failures": failures, "rows": rows}
+    results.update(grounding_probe_summary(rows))
     return results
 
 
@@ -322,6 +495,22 @@ def save_results(results: dict, adapter_name: str) -> str:
         lines.append(f"Doc: {results['doc']} — clean score {results['clean_score']:.4f}\n")
         lines += [f"- {name}: {p['score']:.4f} (drop {p['drop']:+.4f})"
                   for name, p in results["probes"].items()]
+    elif results["mode"] == "ground":
+        mg = results["mean_grounding_supporting"]
+        lines.append(f"Doc: {results['doc']} — subject: \"{results['subject'][:80]}\"\n")
+        lines += [
+            f"- probed chunks: {results['n_probed']} "
+            f"(judge failures: {results['judge_failures']})",
+            f"- claims fired in both passes: {results['claims_fired_fraction']:.2f}",
+            f"- mean grounding ratio (supporting pass): "
+            + ("n/a" if mg is None else f"{mg:.3f}"),
+            f"- contradiction detected: {results['contradiction_detected_fraction']:.2f} "
+            f"(mean {results['mean_contradicted_claims']:.2f} contradicted claims)",
+            f"- mean score drop on contradiction: {results['mean_score_drop']:+.4f}",
+            f"- numeric claims (the only perturbable ones): "
+            + ("n/a" if results.get("numeric_claim_fraction") is None
+               else f"{results['numeric_claim_fraction']:.2f} of extracted claims"),
+        ]
     with open(base + ".md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"\nResults saved to {base}.json / .md")
@@ -330,15 +519,37 @@ def save_results(results: dict, adapter_name: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark the report scorer.")
-    parser.add_argument("mode", choices=["rank", "repeat", "corrupt"])
+    parser.add_argument("mode", choices=["rank", "repeat", "corrupt", "ground"])
     parser.add_argument("--adapter", default="v2", choices=["legacy", "v2"])
-    parser.add_argument("--doc", help="Document stem (repeat/corrupt modes).")
+    parser.add_argument("--doc", help="Document stem (repeat/corrupt/ground modes).")
     parser.add_argument("-k", type=int, default=5, help="Repeat count.")
+    parser.add_argument("--max-chunks", type=int, default=8,
+                        help="Ground mode: numeric chunks probed per document.")
+    parser.add_argument("--probe-chars", type=int, default=1500,
+                        help="Ground mode: probed piece size (~ a training "
+                             "section; the evaluator is measured at the scale "
+                             "the training reward sees).")
+    parser.add_argument("--self-sources", action="store_true",
+                        help="Rank mode: give each chunk itself as its source "
+                             "so the claim check engages (plan 2.10).")
+    parser.add_argument("--derive-subject", action="store_true",
+                        help="Rank/corrupt modes: derive a per-PDF subject "
+                             "from the document's first words.")
     args = parser.parse_args()
+
+    if args.mode == "ground":
+        if not args.doc:
+            parser.error("--doc is required for ground mode")
+        results = asyncio.run(run_grounding(args.doc, max_chunks=args.max_chunks,
+                                            probe_chars=args.probe_chars))
+        save_results(results, args.adapter)
+        return
 
     adapter = get_adapter(args.adapter)
     if args.mode == "rank":
-        results = asyncio.run(run_ranking(adapter))
+        results = asyncio.run(run_ranking(
+            adapter, self_sources=args.self_sources,
+            use_derived_subject=args.derive_subject))
     elif args.mode == "repeat":
         if not args.doc:
             parser.error("--doc is required for repeat mode")
@@ -346,7 +557,8 @@ def main():
     else:
         if not args.doc:
             parser.error("--doc is required for corrupt mode")
-        results = asyncio.run(run_corruption(adapter, args.doc))
+        results = asyncio.run(run_corruption(
+            adapter, args.doc, use_derived_subject=args.derive_subject))
     save_results(results, args.adapter)
 
 

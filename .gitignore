@@ -25,3 +25,4 @@ dist/
 benchmark_rank*.md
 benchmark_repeat*.md
 benchmark_corrupt*.md
+benchmark_ground*.md

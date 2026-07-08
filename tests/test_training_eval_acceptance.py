@@ -624,6 +624,83 @@ def test_stage2_6_runner_wiring():
 
 
 # ---------------------------------------------------------------------------
+# Stage 2.10 — grounding probe in the benchmark harness (offline shapes;
+# the probe itself is LIVE)
+# ---------------------------------------------------------------------------
+
+def test_stage2_10_grounding_probe():
+    bench = _module_or_pending("experiments.scorer_benchmark")
+    derive_subject = _attr_or_pending(bench, "derive_subject")
+    summary_fn = _attr_or_pending(bench, "grounding_probe_summary")
+    run_grounding = _attr_or_pending(bench, "run_grounding")
+
+    # Subject derivation: whitespace-collapsed prefix of the document.
+    subject = derive_subject("A   Study\nof Dense Matter " + "word " * 50)
+    assert subject.startswith("A Study of Dense Matter")
+    assert len(subject.split()) <= 20
+
+    # Pure summary math on synthetic rows: one fully-engaged chunk, one where
+    # the claim check came back empty on both passes.
+    rows = [
+        {"supporting": {"score": 0.8, "n_claims": 4, "n_supported": 4,
+                        "n_unsupported": 0, "n_contradicted": 0,
+                        "grounding_ratio": 1.0, "n_numeric_claims": 3},
+         "contradicting": {"score": 0.2, "n_claims": 4, "n_supported": 0,
+                           "n_unsupported": 1, "n_contradicted": 3,
+                           "grounding_ratio": 0.0, "n_numeric_claims": 3}},
+        {"supporting": {"score": 0.6, "n_claims": 0, "n_supported": 0,
+                        "n_unsupported": 0, "n_contradicted": 0,
+                        "grounding_ratio": None, "n_numeric_claims": 0},
+         "contradicting": {"score": 0.6, "n_claims": 0, "n_supported": 0,
+                           "n_unsupported": 0, "n_contradicted": 0,
+                           "grounding_ratio": None, "n_numeric_claims": 0}},
+    ]
+    s = summary_fn(rows)
+    assert s["n_probed"] == 2
+    assert abs(s["claims_fired_fraction"] - 0.5) < 1e-9
+    assert abs(s["mean_grounding_supporting"] - 1.0) < 1e-9
+    assert abs(s["contradiction_detected_fraction"] - 0.5) < 1e-9
+    assert abs(s["mean_contradicted_claims"] - 1.5) < 1e-9
+    assert abs(s["mean_score_drop"] - 0.3) < 1e-9
+    if "numeric_claim_fraction" not in s:
+        raise Pending("summary has no numeric_claim_fraction diagnostic yet")
+    assert abs(s["numeric_claim_fraction"] - 0.75) < 1e-9
+    empty = summary_fn([])
+    assert empty["n_probed"] == 0 and empty["mean_grounding_supporting"] is None
+
+    # The probe must drive the evaluator TWICE per numeric chunk: once with a
+    # supporting derivative of the chunk (same digits; NOT a verbatim copy —
+    # the judge conflates near-identical texts), once with a numbers-perturbed
+    # copy. Passes are told apart by their digits.
+    import re as _re
+    calls = []
+
+    class _StubEval:
+        async def score_chunk(self, chunk, sources, task, context=None):
+            src = sources[0]["content"]
+            assert src != chunk, "probe source must not be a verbatim self-copy"
+            perturbed = sorted(_re.findall(r"\d", src)) != \
+                sorted(_re.findall(r"\d", chunk))
+            calls.append("perturbed" if perturbed else "self")
+            return SimpleNamespace(
+                score=0.2 if perturbed else 0.8, n_claims=3,
+                n_supported=0 if perturbed else 3, n_unsupported=0,
+                n_contradicted=3 if perturbed else 0,
+                grounding_ratio=0.0 if perturbed else 1.0,
+            )
+
+    text = "Dense matter study. The mass is 5 GeV at 300 K. " * 200
+    out = asyncio.run(run_grounding("stub_doc", text=text, max_chunks=2,
+                                    evaluator=_StubEval()))
+    assert out["mode"] == "ground" and out["n_probed"] == 2
+    assert calls == ["self", "perturbed", "self", "perturbed"]
+    assert out["claims_fired_fraction"] == 1.0
+    assert out["contradiction_detected_fraction"] == 1.0
+    assert abs(out["mean_score_drop"] - 0.6) < 1e-9
+    assert out["subject"], "ground mode must derive a subject"
+
+
+# ---------------------------------------------------------------------------
 # Stage 3 helpers — deterministic stub networks
 # ---------------------------------------------------------------------------
 
@@ -991,6 +1068,7 @@ def _run_all():
         ("test_stage2_4_reward_composition", test_stage2_4_reward_composition),
         ("test_stage2_5_controller_rewired", test_stage2_5_controller_rewired),
         ("test_stage2_6_runner_wiring", test_stage2_6_runner_wiring),
+        ("test_stage2_10_grounding_probe", test_stage2_10_grounding_probe),
         ("test_stage3_1_masked_targets", test_stage3_1_masked_targets),
         ("test_stage3_2_terminal_trained", test_stage3_2_terminal_trained),
         ("test_stage3_3_double_dqn", test_stage3_3_double_dqn),
