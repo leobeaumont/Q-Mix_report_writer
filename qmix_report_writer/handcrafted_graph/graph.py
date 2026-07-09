@@ -225,6 +225,14 @@ class HandcraftedGraph:
                         if candidate:
                             planned = candidate
                             break
+                    # Outline contract guarantee (training_eval plan 5.3.1):
+                    # when the phase rounds produced no parseable outline but a
+                    # coverage scan EXISTS, one deterministic scripted
+                    # LeadArchitect call builds it from the stored scan —
+                    # under the QMIX controller the policy-chosen topology
+                    # cannot be trusted to deliver the coverage as a message.
+                    if not planned:
+                        planned = await self._outline_fallback(input, max_time)
                     ReportState.instance().planned_sections = planned
                     logger.info(
                         f"[{self.id}] Extracted {len(planned)} planned section(s) from PLANNING."
@@ -237,11 +245,15 @@ class HandcraftedGraph:
                     # a clear message instead.
                     if not planned:
                         task_desc = str(input.get("task", "")).strip()[:120]
+                        la_heads = "; ".join(
+                            repr(str(o or "")[:80]) for o in self._planning_la_outputs
+                        ) or "<none>"
                         raise NoCorpusCoverageError(
                             f"PLANNING produced no section outline for task "
                             f"{task_desc!r}. The knowledge base appears to contain no "
                             f"documents relevant to this subject, so no grounded report "
-                            f"can be written. Aborting before drafting an empty report."
+                            f"can be written. Aborting before drafting an empty report. "
+                            f"LeadArchitect round outputs: {la_heads}."
                         )
                     drafting_phase = next(
                         (p for p in writing_phases if p.name == PhaseType.DRAFTING), None
@@ -544,6 +556,64 @@ class HandcraftedGraph:
             return [t.strip() for t in titles]
         titles = re.findall(r'^\d+[.)]\s+(.+?)$', text, re.MULTILINE)
         return [t.strip().rstrip('.,;:') for t in titles if t.strip()]
+
+    async def _outline_fallback(self, input: Dict[str, str], max_time: int) -> List[str]:
+        """Deterministic outline rescue (training_eval plan 5.3.1).
+
+        Under the QMIX controller the POLICY chooses the round topology, so
+        the Researcher's coverage scan may never reach the LeadArchitect as a
+        message (live-observed: exec order ran the LA first, or the scan was
+        routed elsewhere — both smoke episodes aborted outline-less while the
+        scan was rich). The outline is an ENVIRONMENT CONTRACT: when the
+        PLANNING rounds end without one but a coverage scan exists in state,
+        ONE direct scripted LeadArchitect call builds it from the scan — no
+        policy involvement, no recorded step, exactly like the other scripted
+        invariants. A genuinely empty corpus still aborts: no scan, no rescue.
+        """
+        coverage = str(ReportState.instance().coverage_scan or "").strip()
+        if not coverage:
+            return []
+        la_node = next(
+            (n for n in self.nodes.values() if n.agent_name == "LeadArchitect"),
+            None,
+        )
+        if la_node is None:
+            return []
+        logger.warning(
+            f"[{self.id}] PLANNING ended without an outline — running the "
+            f"scripted outline fallback from the stored coverage scan."
+        )
+        system_prompt = la_node.prompt_set.get_description(la_node.role)
+        system_prompt += la_node.prompt_set.get_constraint(la_node.role)
+        user_prompt = (
+            f"### Report Subject:\n{str(input.get('task', ''))}\n\n"
+            f"### Confirmed corpus coverage (the Researcher's PLANNING scan):\n"
+            f"{coverage}\n\n"
+            "### Objective\n"
+            "Build the report outline from the confirmed coverage above. "
+            "ONLY plan sections for topics the coverage explicitly confirms. "
+            "Output ONLY a numbered section list — aim for 6-8 sections, "
+            "never more than 10, fewer if the coverage is narrow. Each entry: "
+            "a bold **title** followed by a one-sentence scope statement. "
+            "Do not output anything else."
+        )
+        try:
+            response = await asyncio.wait_for(
+                la_node.llm.agen(
+                    [{"role": "system", "content": system_prompt},
+                     {"role": "user", "content": user_prompt}],
+                    calling_agent="LeadArchitect",
+                ),
+                timeout=max_time,
+            )
+        except Exception as exc:
+            logger.warning(f"[{self.id}] Outline fallback call failed: {exc}")
+            return []
+        planned = self._parse_section_titles(str(response or ""))
+        logger.info(
+            f"[{self.id}] Outline fallback parsed {len(planned)} section(s)."
+        )
+        return planned
 
     @staticmethod
     def _drafting_blueprint_is_usable(da_output: str) -> bool:

@@ -55,6 +55,12 @@ class ReportState(Singleton):
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
         self.deficient_topics: List[str] = []  # topics absent from the knowledge base
+        # The Researcher's PLANNING coverage scan, persisted as STATE so the
+        # LeadArchitect can build the outline even when message routing did
+        # not deliver it (QMIX training: the policy chooses the topology, and
+        # the exec order may run the LA before the Researcher — live finding
+        # 2026-07-08, training_eval plan 5.3.1).
+        self.coverage_scan: str = ""
         self.planned_sections: List[str] = []   # ordered section titles from PLANNING
         self.drafting_section_idx: int = 0      # current section index during DRAFTING
         self.review_section_idx: int = 0        # current section index during SECTION_REVIEW
@@ -81,6 +87,7 @@ class ReportState(Singleton):
         self.progress = "[NOTHING WRITTEN SO FAR]"
         self.task = "[DO NOT PROCEED, WAIT FOR LEAD ARCHITECT TO ASSIGN A TASK]"
         self.deficient_topics = []
+        self.coverage_scan = ""
         self.planned_sections = []
         self.drafting_section_idx = 0
         self.review_section_idx = 0

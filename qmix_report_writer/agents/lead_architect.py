@@ -30,13 +30,29 @@ class LeadArchitect(Node):
         try:
             from qmix_report_writer.handcrafted_graph.state import PhaseState
             from qmix_report_writer.handcrafted_graph.phases import PhaseType
-            if (
-                PhaseState.instance().current_phase == PhaseType.PLANNING
-                and self.report.deficient_topics
-            ):
-                absent_block = "\n\nTopics absent from knowledge base — do NOT plan sections for these:\n"
-                absent_block += "\n".join(f"- {t}" for t in self.report.deficient_topics)
-                report_context += absent_block
+            if PhaseState.instance().current_phase == PhaseType.PLANNING:
+                # Coverage fallback (training_eval plan 5.3.1): the outline is
+                # an environment contract, so the Researcher's coverage scan
+                # must reach the LA even when the policy-chosen topology or
+                # exec order did not deliver it as a message. Injected ONLY
+                # when no Researcher message arrived this round — in the
+                # handcrafted pipeline the table edge always delivers, so
+                # handcrafted prompts stay byte-identical.
+                researcher_spoke = any(
+                    str(info.get("role", "")) == "Researcher"
+                    for info in (spatial_info or {}).values()
+                )
+                if self.report.coverage_scan and not researcher_spoke:
+                    report_context += (
+                        "\n\nConfirmed corpus coverage (the Researcher's stored "
+                        "PLANNING scan — treat it as the Researcher's coverage "
+                        "message and build the outline from it):\n"
+                        + self.report.coverage_scan
+                    )
+                if self.report.deficient_topics:
+                    absent_block = "\n\nTopics absent from knowledge base — do NOT plan sections for these:\n"
+                    absent_block += "\n".join(f"- {t}" for t in self.report.deficient_topics)
+                    report_context += absent_block
         except Exception:
             pass
         user_prompt = self._build_user_prompt(

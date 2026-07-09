@@ -84,6 +84,15 @@ def _reset_singletons():
 
 async def test_random_policy_dry_run():
     _reset_singletons()
+    # Fixed seed: the "random" policy is exercise material, but the reward
+    # assertions below describe ONE concrete episode path (exactly 2 appends).
+    # Unseeded, a rare random draw can no_op EVERY prep agent in a section's
+    # round A (~0.5%), the Collector then skips the write round, and the
+    # section is silently lost — legitimate environment dynamics (the policy
+    # pays for it in reward: fewer appends, shorter report), but it flakes
+    # this suite's canonical-path assertions (observed 2026-07-08; seed 1234
+    # reproduces the 1-section path deterministically if ever needed).
+    np.random.seed(42)
 
     from qmix_report_writer.qmix.observations import get_obs_dim, get_state_dim
     from qmix_report_writer.qmix.agent_network import NUM_ACTIONS

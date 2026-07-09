@@ -504,7 +504,10 @@ async def _judge_call(llm, messages, schema, required_keys):
             temperature=attempt_temperature,
             response_schema=_sub_schema(schema, missing) if merged else schema,
         )
-        conformed = _conform_to_schema(safe_json_parse(last), schema)
+        # quiet=True: an unparseable attempt is routine here (truncation at
+        # num_predict) — the completion loop retries and JudgeError carries
+        # the raw head; the CRITICAL print only alarmed live-run consoles.
+        conformed = _conform_to_schema(safe_json_parse(last, quiet=True), schema)
         made_progress = False
         if conformed:
             for key, val in conformed.items():

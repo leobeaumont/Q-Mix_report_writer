@@ -3,8 +3,13 @@ import json
 import hashlib
 from typing import Any, Dict, List, Optional
 
-def safe_json_parse(text):
-    """Clean markdown and attempt to fix truncated JSON."""
+def safe_json_parse(text, quiet=False):
+    """Clean markdown and attempt to fix truncated JSON.
+
+    quiet: suppress the failure print — for callers with their own retry
+    and error accounting (the judge call loop), where a failed attempt is
+    routine and already surfaced through their logging.
+    """
     if not text:
         return {}
 
@@ -16,6 +21,17 @@ def safe_json_parse(text):
         return json.loads(text)
     except json.JSONDecodeError:
         pass
+
+    # 2b. Invalid \escapes — models write raw LaTeX inside JSON strings
+    # ("$\mu_B$", "\alpha"), and a lone backslash kills json.loads (live:
+    # judge replies failed all retries on this). Valid escape PAIRS are
+    # consumed whole so "\\" and "\n" survive; only lone backslashes double.
+    repaired = re.sub(r'(\\["\\/bfnrtu])|\\', lambda m: m.group(1) or "\\\\", text)
+    if repaired != text:
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            text = repaired  # let the later recovery stages use the repair
 
     # 3. Model added preamble/postamble — find the first { ... } block
     json_match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -33,7 +49,8 @@ def safe_json_parse(text):
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
+        if not quiet:
+            print(f"CRITICAL: Failed to parse LLM response: {text[:100]}...")
         return {}
 
 def extract_number(text: str) -> Optional[float]:

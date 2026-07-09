@@ -151,6 +151,21 @@ class Researcher(Node):
         for match in re.finditer(r"State Deficiency:\s*(.+?)(?:\n|$)", response, re.IGNORECASE):
             self.report.add_deficiency(match.group(1).strip())
 
+    def _persist_coverage(self, response: str) -> None:
+        """Store the FIRST PLANNING coverage scan in ReportState (plan 5.3.1).
+
+        The scan must survive as state: under the QMIX controller the policy
+        picks the topology, and a Researcher→LeadArchitect message can
+        evaporate when the LA executes first (live-observed — both smoke
+        episodes aborted outline-less while the scan was rich). First response
+        wins: round 0 IS the designated scan round; later PLANNING rounds are
+        follow-ups (possibly a one-line duplicate-retrieval signal) and must
+        not clobber it.
+        """
+        response = (response or "").strip()
+        if response and not self.report.coverage_scan:
+            self.report.coverage_scan = response
+
     def _get_da_output(self, spatial_info: dict):
         """Return DataAnalyst's message from spatial_info, or None if absent."""
         for info in spatial_info.values():
@@ -390,6 +405,7 @@ class Researcher(Node):
             execution_trace.trace[-1]["Researcher"]["response"] = response
         if self._is_planning_phase():
             self._persist_deficiencies(response)
+            self._persist_coverage(response)
         return response
 
 if __name__ == "__main__":

@@ -95,8 +95,8 @@ def build_trainer(n_agents: int, device: str = "cpu") -> QMIXTrainer:
     )
 
 
-def _save_trace() -> None:
-    ExecutionTrace.instance().save_trace(str(get_output_root() / QMIX_TRACE_FILENAME))
+def _save_trace(filename: str = QMIX_TRACE_FILENAME) -> None:
+    ExecutionTrace.instance().save_trace(str(get_output_root() / filename))
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +213,8 @@ async def _run_eval_episode(
         logger.warning(f"Eval episode aborted: {exc}")
     finally:
         await controller.on_run_end()
+        if execution_trace:
+            _save_trace("qmix_trace_eval.json")
 
     return {"task": task, **_episode_stats(controller, aborted)}
 
@@ -437,7 +439,9 @@ async def run_qmix_train(
         finally:
             await controller.on_run_end()  # idempotent — arun also calls it
             if execution_trace:
-                _save_trace()
+                # Per-episode file (plan 5.3.1): an overwritten single trace
+                # made the first live abort undiagnosable once episode 2 ran.
+                _save_trace(f"qmix_trace_ep{ep_idx + 1}.json")
 
         episode = controller.episode
         stats = _episode_stats(controller, aborted)

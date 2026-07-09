@@ -1052,6 +1052,156 @@ def test_stage5_2_config_clean():
 
 
 # ---------------------------------------------------------------------------
+# Stage 5.3.1 — PLANNING coverage handoff hardening (live-smoke finding:
+# the Researcher's coverage scan must reach the LeadArchitect as STATE, not
+# only as a policy-routed message)
+# ---------------------------------------------------------------------------
+
+def test_stage5_3_coverage_fallback():
+    from qmix_report_writer.agents.lead_architect import LeadArchitect
+    from qmix_report_writer.agents.researcher import Researcher
+    from qmix_report_writer.handcrafted_graph.phases import PhaseType
+    from qmix_report_writer.handcrafted_graph.state import PhaseState
+    from qmix_report_writer.handcrafted_graph.prompts.handcrafted_prompt_set import (
+        PHASE_ROLE_OBJECTIVES,
+    )
+
+    rs = ReportState.instance()
+    if not hasattr(rs, "coverage_scan"):
+        raise Pending("ReportState has no coverage_scan state yet")
+
+    _reset_state()
+    rs = ReportState.instance()
+    assert rs.coverage_scan == "", "reset must clear the stored coverage scan"
+
+    # Researcher persistence: FIRST non-empty PLANNING response wins — a later
+    # one-line follow-up must not clobber the rich scan.
+    persist = getattr(Researcher, "_persist_coverage", None)
+    if persist is None:
+        raise Pending("Researcher has no _persist_coverage hook yet")
+    stub = Researcher.__new__(Researcher)
+    stub.report = rs
+    persist(stub, "Confirmed topics: 1. QCD phase diagram ...")
+    persist(stub, "State Deficiency: duplicate retrieval.")
+    assert rs.coverage_scan.startswith("Confirmed topics"), \
+        "later PLANNING responses must not overwrite the first scan"
+
+    # LeadArchitect injection: fires ONLY when no Researcher message arrived
+    # this round (handcrafted prompts stay byte-identical).
+    la = LeadArchitect(llm_name="tinyllama")
+    PhaseState.instance().set_phase(PhaseType.PLANNING)
+    try:
+        inputs = {"task": "Quark-Gluon Plasma"}
+        researcher_msg = {"n1": {"role": "Researcher", "output": "scan text"}}
+        _, with_msg = la._process_inputs(inputs, researcher_msg, {})
+        assert "Confirmed corpus coverage" not in with_msg, \
+            "block must NOT be injected when the Researcher's message arrived"
+
+        _, without_msg = la._process_inputs(inputs, {}, {})
+        if "Confirmed corpus coverage" not in without_msg:
+            raise Pending("LA does not inject the stored coverage scan yet")
+        assert "QCD phase diagram" in without_msg, \
+            "the injected block must carry the stored scan content"
+
+        rs.coverage_scan = ""
+        _, no_scan = la._process_inputs(inputs, {}, {})
+        assert "Confirmed corpus coverage" not in no_scan, \
+            "no block when no scan is stored (round 1: sentinel is correct)"
+    finally:
+        _reset_state()
+        PhaseState.instance().reset()
+
+    # Objective gating is previous-output-based, not round-based — a round-2
+    # rescue with injected coverage must be allowed.
+    objective = PHASE_ROLE_OBJECTIVES[(PhaseType.PLANNING, "Lead Architect")]
+    if "Round 1 of PLANNING only" in objective:
+        raise Pending("PLANNING objective still gates outline-building by round")
+    assert "previous output" in objective and "Confirmed corpus" in objective
+
+    # ── Graph-level contract guarantee: PLANNING ends outline-less (the LA
+    # refuses in every round) but a coverage scan exists → ONE deterministic
+    # scripted LA call builds the outline; no scan → the abort still fires.
+    from unittest.mock import patch
+
+    from qmix_report_writer.handcrafted_graph.graph import (
+        HandcraftedGraph, NoCorpusCoverageError,
+    )
+    from qmix_report_writer.handcrafted_graph.phases import PLANNING_PHASE
+
+    if not hasattr(HandcraftedGraph, "_outline_fallback"):
+        raise Pending("graph has no scripted outline fallback yet")
+
+    agents = ["LeadArchitect", "Researcher", "DataAnalyst", "Reviewer", "Collector"]
+
+    # NB: the trigger must be UNIQUE to the fallback prompt — the phrase
+    # "Confirmed corpus coverage" also occurs in the PLANNING objective text
+    # rendered into every LA round prompt.
+    _FALLBACK_MARKER = "Build the report outline from the confirmed coverage above"
+
+    class _ScriptedLLM:
+        async def agen(self, messages, calling_agent=None, **kwargs):
+            user = str(messages[-1].get("content", ""))
+            if calling_agent == "LeadArchitect":
+                if _FALLBACK_MARKER in user:  # the scripted fallback call
+                    return "1. **Rescued Alpha**\n2. **Rescued Beta**"
+                return "[AWAITING_COVERAGE_DATA]"  # refuses in every round
+            if calling_agent == "Researcher":
+                return "Confirmed topics: alpha decay chains; beta spectra."
+            return "queries alpha\nqueries beta"  # RAG query formulation
+
+        def gen(self, messages, calling_agent=None, **kwargs):
+            return "stub"
+
+    class _StubRAG:
+        empty = False
+
+        def __init__(self, *a, **k):
+            pass
+
+        def query_docs_multi(self, queries, top_k=5):
+            if _StubRAG.empty:
+                return []
+            return [{"id": "c1", "source": "stub.pdf", "page": 1,
+                     "content": "alpha decay chains and beta spectra."}]
+
+    async def _drive_planning():
+        with patch("qmix_report_writer.agents.researcher.RAGManager", _StubRAG):
+            graph = HandcraftedGraph(
+                llm_name="tinyllama", agent_names=agents,
+                phases=[PLANNING_PHASE],
+            )
+        for node in graph.nodes.values():
+            node.llm = _ScriptedLLM()
+        await graph.arun({"task": "Alpha and beta decay"},
+                         max_validation_attempts=0, finalize=False)
+
+    _reset_state()
+    try:
+        asyncio.run(_drive_planning())
+        assert ReportState.instance().planned_sections == \
+            ["Rescued Alpha", "Rescued Beta"], (
+                f"fallback outline not stored: "
+                f"{ReportState.instance().planned_sections}"
+            )
+
+        # No coverage scan (RAG empty → Researcher exhausted) → still aborts.
+        _reset_state()
+        _StubRAG.empty = True
+        try:
+            asyncio.run(_drive_planning())
+            raise AssertionError(
+                "genuinely-empty corpus must still abort PLANNING"
+            )
+        except NoCorpusCoverageError as exc:
+            assert "LeadArchitect round outputs" in str(exc), \
+                "abort message must carry the LA outputs for diagnosis"
+    finally:
+        _StubRAG.empty = False
+        _reset_state()
+        PhaseState.instance().reset()
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1081,6 +1231,7 @@ def _run_all():
         ("test_stage4_4_seeding", test_stage4_4_seeding),
         ("test_stage4_5_checkpoint_v2", test_stage4_5_checkpoint_v2),
         ("test_stage5_2_config_clean", test_stage5_2_config_clean),
+        ("test_stage5_3_coverage_fallback", test_stage5_3_coverage_fallback),
     ]
     for name, fn in cases:
         try:

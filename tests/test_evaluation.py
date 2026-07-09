@@ -252,6 +252,25 @@ def test_empty_claims_reask_failure_keeps_empty():
     print("PASS  test_empty_claims_reask_failure_keeps_empty")
 
 
+def test_latex_escapes_in_judge_reply():
+    # Live failure (5.3 smoke #3): the judge writes raw LaTeX inside the JSON
+    # ("$\mu_B$") — an invalid \escape that killed json.loads on EVERY retry,
+    # skipping the reward event. safe_json_parse must repair lone backslashes
+    # (valid escapes like \n and \\ untouched) so the reply scores normally.
+    audit = (
+        '{"local_audit_notes": "Correct sign problem at finite $\\mu_B$ and '
+        '\\alpha decay;\\nvalid escape kept.", "logical_soundness": 4, '
+        '"verifiability_score": 4, "technical_precision": 4, '
+        '"info_density": 4, "hallucination_flag": false}'
+    )
+    assert "\\m" in audit and "\\a" in audit  # genuinely invalid escapes
+    result = _score_chunk([audit, _claims_reply("supported", n=2)])
+    assert result is not None, "LaTeX in judge notes must not fail the event"
+    assert result.rubric_mean == 0.8
+    assert "$\\mu_B$" in result.notes
+    print("PASS  test_latex_escapes_in_judge_reply")
+
+
 def test_judge_failure_returns_none():
     attempts = int(_judge_cfg().get("retries", 2)) + 1
     result = _score_chunk(["not json {{{"] * attempts)
@@ -303,6 +322,7 @@ def _run_all():
          test_unusable_claims_reask_on_markers),
         ("test_empty_claims_reask_failure_keeps_empty",
          test_empty_claims_reask_failure_keeps_empty),
+        ("test_latex_escapes_in_judge_reply", test_latex_escapes_in_judge_reply),
         ("test_judge_failure_returns_none", test_judge_failure_returns_none),
         ("test_macro_composition_and_prompt", test_macro_composition_and_prompt),
     ]
