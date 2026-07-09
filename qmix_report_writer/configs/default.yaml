@@ -44,6 +44,11 @@ qmix:
     num_episodes: 500
     epsilon_start: 1.0
     epsilon_end: 0.05
+    # Episodes over which ε anneals from start→end. null/0 → the whole run
+    # (ε only floors on the final episode). Set below num_episodes (e.g. ~50-60%
+    # of it) so an expensive run stops exploring random topologies mid-way and
+    # spends its final episodes exploiting the learned policy.
+    epsilon_decay_episodes:
     save_interval: 50
     # Training-loop engineering (plan 4.1/4.2/4.4/4.5):
     train_steps_per_episode: 4   # gradient steps after each episode (replay ratio)

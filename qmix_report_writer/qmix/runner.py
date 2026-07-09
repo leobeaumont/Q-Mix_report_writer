@@ -333,6 +333,10 @@ async def run_qmix_train(
         num_episodes = int(tcfg.get("num_episodes", 500))
     eps_start = float(tcfg.get("epsilon_start", 1.0))
     eps_end = float(tcfg.get("epsilon_end", 0.05))
+    # Episodes over which ε anneals to its floor. Unset/0 → the whole run
+    # (legacy behavior). Set below num_episodes to floor ε mid-run so the
+    # back of an expensive run exploits instead of exploring random topologies.
+    eps_decay_episodes = int(tcfg.get("epsilon_decay_episodes") or 0)
     save_interval = int(tcfg.get("save_interval", 50))
     train_steps_per_episode = int(tcfg.get("train_steps_per_episode", 4))
     min_buffer_episodes = int(tcfg.get("min_buffer_episodes", 8))
@@ -397,7 +401,11 @@ async def run_qmix_train(
         if with_buffer and persist_buffer:
             trainer.replay_buffer.save(path + ".buffer.pt")
 
-    eps_decay = (eps_start - eps_end) / max(num_episodes, 1)
+    # ε reaches eps_end at eps_decay_episodes (falls back to the whole run when
+    # unset). Decoupling the anneal horizon from num_episodes lets a short run
+    # spend its final episodes near-greedy rather than annealing to the very end.
+    eps_decay_horizon = eps_decay_episodes if eps_decay_episodes > 0 else num_episodes
+    eps_decay = (eps_start - eps_end) / max(eps_decay_horizon, 1)
     recent_rewards: List[float] = []
     train_start = time.time()
 

@@ -557,6 +557,47 @@ class HandcraftedGraph:
         titles = re.findall(r'^\d+[.)]\s+(.+?)$', text, re.MULTILINE)
         return [t.strip().rstrip('.,;:') for t in titles if t.strip()]
 
+    def _retrieve_coverage_evidence(self, input: Dict[str, str]) -> str:
+        """Direct corpus retrieval backstop for the outline contract
+        (training_eval plan 5.3.1 amendment — policy-routing gap).
+
+        When PLANNING ends with an EMPTY coverage_scan (the policy routed the
+        Researcher's scan round so nothing was persisted, or the required scan
+        never executed), the message/state handoff both failed. Reuse the
+        Researcher node's own RAGManager and PLANNING top_k to retrieve
+        evidence for the subject — exactly what the scan would have surfaced —
+        so the scripted LeadArchitect can still build the outline. Returns the
+        formatted chunks, or "" when retrieval is genuinely empty (truly no
+        corpus coverage → the NoCorpusCoverageError abort still fires).
+        """
+        researcher = next(
+            (n for n in self.nodes.values() if n.agent_name == "Researcher"),
+            None,
+        )
+        rag = getattr(researcher, "rag", None)
+        if rag is None:
+            return ""
+        subject = str((input or {}).get("task", "")).strip()
+        if not subject or subject.startswith("["):
+            return ""
+        try:
+            top_k = int(getattr(researcher, "top_k_planning", 3))
+            documents = rag.query_docs_multi([subject], top_k=top_k)
+        except Exception as exc:
+            logger.warning(f"[{self.id}] Outline-fallback retrieval failed: {exc}")
+            return ""
+        if not documents:
+            return ""
+        logger.info(
+            f"[{self.id}] Outline-fallback retrieved {len(documents)} chunk(s) "
+            f"directly (coverage scan was empty)."
+        )
+        return "\n\n".join(
+            f"<source> {d.get('source', '?')} </source>\n"
+            f"<content>\n{d.get('content', '')}\n</content>"
+            for d in documents
+        )
+
     async def _outline_fallback(self, input: Dict[str, str], max_time: int) -> List[str]:
         """Deterministic outline rescue (training_eval plan 5.3.1).
 
@@ -571,6 +612,16 @@ class HandcraftedGraph:
         invariants. A genuinely empty corpus still aborts: no scan, no rescue.
         """
         coverage = str(ReportState.instance().coverage_scan or "").strip()
+        if not coverage:
+            # The Researcher's coverage scan never reached state. Under the
+            # QMIX policy the scan round can be routed so no scan is persisted
+            # (live-observed: exec_order ran DataAnalyst/LA/Reviewer, the
+            # Researcher never executed, so coverage_scan stayed empty even
+            # though the corpus fully covered the subject — PLANNING then
+            # aborted at reward 0). Retrieve corpus evidence directly so the
+            # outline contract holds under ANY policy routing; a genuinely
+            # empty corpus still yields nothing here and the abort fires.
+            coverage = self._retrieve_coverage_evidence(input)
         if not coverage:
             return []
         la_node = next(
