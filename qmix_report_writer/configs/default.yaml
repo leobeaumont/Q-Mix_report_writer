@@ -33,28 +33,32 @@ qmix:
   mixing_hidden_dim: 64
   lr: 5e-4
   gamma: 0.99
-  # Gradient steps between hard target updates. Revisited for plan 4.1: at
-  # train_steps_per_episode=4 this refreshes the target every ~25 episodes
-  # (the old 200 was tuned for 1 step/episode and would stretch to 50).
+  # Gradient steps between hard target updates. At train_steps_per_episode=6
+  # this refreshes the target roughly every ~17 episodes. The optimizer-
+  # stability sweep (2026-07-09) showed no divergence across lr 1e-4..1e-3 ×
+  # target_update 50/100/200 at the real data scale — 100 kept as a safe middle.
   target_update_interval: 100
   buffer_capacity: 5000
   batch_size: 32
   grad_clip: 10.0
   training:
-    num_episodes: 500
+    # Recommended first-campaign defaults (validated 2026-07-09). Episodes are
+    # expensive (~15 min each on the 30B). If you change the run length, keep
+    # num_episodes and epsilon_decay_episodes ~proportional (decay ≈ 60% of
+    # num_episodes). Track a run with experiments/monitor_training.py.
+    num_episodes: 250
     epsilon_start: 1.0
     epsilon_end: 0.05
-    # Episodes over which ε anneals from start→end. null/0 → the whole run
-    # (ε only floors on the final episode). Set below num_episodes (e.g. ~50-60%
-    # of it) so an expensive run stops exploring random topologies mid-way and
-    # spends its final episodes exploiting the learned policy.
-    epsilon_decay_episodes:
-    save_interval: 50
+    # Episodes over which ε anneals start→end. null/0 → the whole run (ε only
+    # floors on the final episode). At 150 (~60% of 250) ε reaches its floor
+    # mid-run, so the back half exploits the learned policy instead of exploring.
+    epsilon_decay_episodes: 150
+    save_interval: 25            # checkpoint + buffer sidecar every N episodes
     # Training-loop engineering (plan 4.1/4.2/4.4/4.5):
-    train_steps_per_episode: 4   # gradient steps after each episode (replay ratio)
-    min_buffer_episodes: 8       # warmup: no training below this many episodes
+    train_steps_per_episode: 6   # gradient steps per episode — squeeze more learning from each costly episode
+    min_buffer_episodes: 5       # warmup: start gradient steps once the buffer holds this many episodes
     eval_interval: 25            # greedy eval episode (eps=0, not buffered) every N episodes; 0 disables
-    seed:                        # null -> unseeded; set for reproducible runs (torch/numpy/random)
+    seed: 42                     # reproducible; set null for varied/independent runs
     persist_buffer: true         # save the replay buffer next to checkpoints; --resume reloads it
   obs:
     # Observation text features (task + progress summary). By default they are
