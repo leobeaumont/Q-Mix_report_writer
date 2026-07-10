@@ -46,14 +46,14 @@ qmix:
     # expensive (~15 min each on the 30B). If you change the run length, keep
     # num_episodes and epsilon_decay_episodes ~proportional (decay ≈ 60% of
     # num_episodes). Track a run with experiments/monitor_training.py.
-    num_episodes: 250
+    num_episodes: 500
     epsilon_start: 1.0
     epsilon_end: 0.05
     # Episodes over which ε anneals start→end. null/0 → the whole run (ε only
     # floors on the final episode). At 150 (~60% of 250) ε reaches its floor
     # mid-run, so the back half exploits the learned policy instead of exploring.
-    epsilon_decay_episodes: 150
-    save_interval: 25            # checkpoint + buffer sidecar every N episodes
+    epsilon_decay_episodes: 250
+    save_interval: 10            # checkpoint + buffer sidecar every N episodes
     # Training-loop engineering (plan 4.1/4.2/4.4/4.5):
     train_steps_per_episode: 6   # gradient steps per episode — squeeze more learning from each costly episode
     min_buffer_episodes: 5       # warmup: start gradient steps once the buffer holds this many episodes

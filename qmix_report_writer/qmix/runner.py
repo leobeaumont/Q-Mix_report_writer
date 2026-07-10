@@ -95,6 +95,63 @@ def build_trainer(n_agents: int, device: str = "cpu") -> QMIXTrainer:
     )
 
 
+def _preflight_gradient_step(n_agents: int, device: str = "cpu") -> None:
+    """Exercise the full gradient path ONCE, on synthetic data, before episode 1.
+
+    The real `train_step()` only fires after `min_buffer_episodes` episodes —
+    over an hour into a run at ~15 min/episode. So a fault in the backward /
+    optimizer path (live-observed: torch's Adam accelerator health check
+    initializing a CUDA context that OOMs because the LLM server owns the VRAM)
+    crashes the run only AFTER hours of expensive work. This reproduces that
+    exact code path (forward → backward → optimizer.step) in ~1 second, on a
+    throwaway trainer, so the run dies immediately or not at all.
+
+    Raises whatever the real path would raise; never touches the real trainer.
+    Side-effect free: building the probe net and sampling the batch would
+    otherwise advance the torch/numpy/random streams and change the seeded
+    trainer's initialization, so every RNG state is saved and restored.
+    """
+    from qmix_report_writer.qmix.replay_buffer import Episode, EpisodeStep
+
+    torch_state = torch.get_rng_state()
+    np_state = np.random.get_state()
+    py_state = random.getstate()
+    try:
+        probe = build_trainer(n_agents, device=device)
+        obs_dim, state_dim = get_obs_dim(), get_state_dim(n_agents)
+        n_acting = n_agents - 1
+        rng = np.random.default_rng(0)
+        for _ in range(2):
+            episode = Episode()
+            for t in range(3):
+                episode.add_step(EpisodeStep(
+                    observations=rng.standard_normal((n_agents, obs_dim)).astype(np.float32),
+                    actions=rng.integers(0, NUM_ACTIONS, size=n_acting),
+                    team_reward=float(rng.random()),
+                    adj_matrix=(rng.random((n_agents, n_agents)) > 0.5).astype(np.float32),
+                    global_state=rng.standard_normal(state_dim).astype(np.float32),
+                    done=(t == 2),
+                    mask=np.ones((n_acting, NUM_ACTIONS), dtype=bool),
+                ))
+            probe.replay_buffer.push(episode)
+
+        info = probe.train_step()
+    finally:
+        torch.set_rng_state(torch_state)
+        np.random.set_state(np_state)
+        random.setstate(py_state)
+
+    if info is None or not np.isfinite(info["loss"]):
+        raise RuntimeError(
+            f"Preflight gradient step produced no finite loss: {info!r}. "
+            f"The trainer would fail once the replay buffer warms up."
+        )
+    msg = (f"Preflight gradient step OK (loss={info['loss']:.4f}, device={device}, "
+           f"torch.cuda.is_available()={torch.cuda.is_available()})")
+    logger.info(msg)
+    print(f"  {msg}")
+
+
 def _save_trace(filename: str = QMIX_TRACE_FILENAME) -> None:
     ExecutionTrace.instance().save_trace(str(get_output_root() / filename))
 
@@ -346,6 +403,10 @@ async def run_qmix_train(
     if seed is not None:
         _seed_everything(int(seed))
         logger.info(f"Seeded torch/numpy/random with {seed}")
+
+    # Fail fast: prove the gradient path works before spending ~15 min/episode
+    # waiting for the buffer to warm up (see _preflight_gradient_step).
+    _preflight_gradient_step(len(agent_names), device=device)
 
     trainer = build_trainer(len(agent_names), device=device)
 

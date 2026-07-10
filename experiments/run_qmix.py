@@ -19,6 +19,12 @@ import asyncio
 warnings.filterwarnings("ignore", message=".*pkg_resources.*")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
+# CPU-only guard: MUST run before torch is imported. A merely-VISIBLE NVIDIA
+# card makes torch initialize a CUDA context (and OOM when the LLM server owns
+# the VRAM) even with every tensor on the CPU. See run_qmix_train.py for detail.
+if os.environ.get("QMIX_ALLOW_CUDA") != "1":
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets.tasks import tasks

@@ -25,7 +25,24 @@ from datetime import datetime
 warnings.filterwarnings("ignore", message=".*pkg_resources.*")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
+# ---- CPU-only guard: MUST run before torch is imported ---------------------
+# The QMIX nets are tiny and train on CPU. But if an NVIDIA card is merely
+# VISIBLE, torch's Adam.step() runs `_accelerator_graph_capture_health_check`,
+# which calls torch.accelerator.current_stream() and INITIALIZES A CUDA CONTEXT
+# even though every tensor is on the CPU. On a box where the LLM server already
+# owns the VRAM that allocation fails:
+#     torch.AcceleratorError: CUDA error: out of memory
+# and it fails at the FIRST gradient step, i.e. only after `min_buffer_episodes`
+# episodes -- hours into a run. Hiding the device makes torch.cuda.is_available()
+# and torch.accelerator.is_available() False, so the check short-circuits and no
+# CUDA context is ever created. Ollama is a separate process and is unaffected.
+# Opt out with QMIX_ALLOW_CUDA=1 if you ever want torch itself on the GPU.
+if os.environ.get("QMIX_ALLOW_CUDA") != "1":
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import torch
 
 from datasets.tasks import tasks
 from qmix_report_writer.qmix.runner import run_qmix_train
@@ -66,9 +83,17 @@ def main():
     print(f"  LLM:        {llm_name}")
     print(f"  Episodes:   {args.num_episodes or cfg.get('qmix', {}).get('training', {}).get('num_episodes', 500)}")
     print(f"  Device:     {args.device}")
+    print(f"  Torch:      {torch.__version__} | "
+          f"cuda.is_available={torch.cuda.is_available()} "
+          f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')!r})")
     print(f"  Checkpoint: {save_path}")
     print("=" * 60)
     print()
+
+    if args.device == "cpu" and torch.cuda.is_available():
+        print("WARNING: device=cpu but torch still sees CUDA. Adam's accelerator "
+              "health check may initialize a CUDA context and OOM. Unset "
+              "QMIX_ALLOW_CUDA or export CUDA_VISIBLE_DEVICES=''.\n")
 
     asyncio.run(
         run_qmix_train(
